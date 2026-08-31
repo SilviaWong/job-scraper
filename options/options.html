@@ -1,0 +1,960 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>招聘数据管理后台</title>
+    <link rel="stylesheet" href="options.css">
+    <script src="chart.js"></script>
+    <script src="../libs/xlsx.full.min.js"></script>
+    <script src="../libs/job_normalizer.js"></script>
+    
+    <!-- Removed Vue & Element Plus due to Chrome MV3 CSP restrictions on unsafe-eval -->
+    <style>
+        /* 原生折叠面板样式 (模仿 Element Plus) */
+        .native-collapse { border-top: 1px solid #ebeef5; border-bottom: 1px solid #ebeef5; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+        .native-collapse-item { border-bottom: 1px solid #ebeef5; }
+        .native-collapse-item:last-child { border-bottom: none; }
+        .native-collapse-header { display: flex; align-items: center; padding: 15px 10px; cursor: pointer; transition: background-color 0.2s; user-select: none; }
+        .native-collapse-header:hover { background-color: #fafafa; }
+        .native-collapse-arrow { transition: transform 0.3s; margin-right: 10px; font-size: 12px; color: #909399; }
+        .native-collapse-item.is-active .native-collapse-arrow { transform: rotate(90deg); }
+        .native-collapse-content { display: none; padding: 15px; border-top: 1px solid #ebeef5; background-color: #fafafa; }
+        .native-collapse-item.is-active .native-collapse-content { display: block; }
+        
+        .company-header-info { display: flex; align-items: center; gap: 15px; width: 100%; flex-wrap: wrap; }
+        .native-tag { padding: 2px 8px; border-radius: 12px; font-size: 12px; border: 1px solid #dcdfe6; background: #f4f4f5; color: #909399; }
+        .native-tag.success { background: #f0f9eb; border-color: #e1f3d8; color: #67c23a; }
+        .native-tag.warning { background: #fdf6ec; border-color: #faecd8; color: #e6a23c; }
+        .native-tag.danger { background: #fef0f0; border-color: #fde2e2; color: #f56c6c; }
+        .native-tag.primary { background: #ecf5ff; border-color: #d9ecff; color: #409eff; }
+        .native-tag.dark { background: #909399; color: white; border-color: #909399; }
+        .native-tag.dark.success { background: #67c23a; border-color: #67c23a; }
+        .native-tag.dark.warning { background: #e6a23c; border-color: #e6a23c; }
+        .native-tag.dark.danger { background: #f56c6c; border-color: #f56c6c; }
+        .native-tag.dark.primary { background: #409eff; border-color: #409eff; }
+        
+        .job-card-grid { display: grid; grid-template-columns: 1fr; gap: 15px; }
+        .search-container { margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
+        .search-container input { padding: 8px 12px; border: 1px solid #dcdfe6; border-radius: 4px; width: 300px; font-size: 14px; outline: none; transition: border-color 0.2s; }
+        .search-container input:focus { border-color: #409eff; }
+    </style>
+</head>
+
+<body>
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <h2>📊 管理面板</h2>
+        </div>
+        <ul class="nav">
+            <li class="active" data-target="boss-data">
+                <div class="icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M20 7h-9" />
+                        <path d="M14 17H5" />
+                        <circle cx="17" cy="17" r="3" />
+                        <circle cx="7" cy="7" r="3" />
+                    </svg>
+                </div>
+                <span class="text">Boss 直聘数据</span>
+            </li>
+            <li data-target="51job-data">
+                <div class="icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect width="18" height="18" x="3" y="3" rx="2" />
+                        <path d="M7 7h10" />
+                        <path d="M7 12h10" />
+                        <path d="M7 17h10" />
+                    </svg>
+                </div>
+                <span class="text">51job 数据</span>
+            </li>
+            <li data-target="liepin-data">
+                <div class="icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                        <circle cx="9" cy="7" r="4" />
+                        <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                    </svg>
+                </div>
+                <span class="text">猎聘数据</span>
+            </li>
+            <li data-target="zhilian-data">
+                <div class="icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 20h9" />
+                        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+                    </svg>
+                </div>
+                <span class="text">智联数据</span>
+            </li>
+            <li data-target="merged-data"
+                style="border-top: 1px solid rgba(0,0,0,0.06); margin-top: 8px; padding-top: 14px;">
+                <div class="icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10" />
+                        <path d="m16 12-4-4-4 4" />
+                        <path d="M12 16V8" />
+                    </svg>
+                </div>
+                <span class="text">全网合并去重</span>
+            </li>
+            <li data-target="dashboard-data">
+                <div class="icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 3v18h18" />
+                        <path d="M18 17V9" />
+                        <path d="M13 17V5" />
+                        <path d="M8 17v-3" />
+                    </svg>
+                </div>
+                <span class="text">数据看板</span>
+            </li>
+            <li data-target="kanban-board"
+                style="border-top: 1px solid rgba(0,0,0,0.06); margin-top: 8px; padding-top: 14px;">
+                <div class="icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect width="7" height="9" x="3" y="3" rx="1" />
+                        <rect width="7" height="5" x="14" y="3" rx="1" />
+                        <rect width="7" height="9" x="14" y="12" rx="1" />
+                        <rect width="7" height="5" x="3" y="16" rx="1" />
+                    </svg>
+                </div>
+                <span class="text">投递看板</span>
+            </li>
+            <li data-target="model-settings"
+                style="border-top: 1px solid rgba(0,0,0,0.06); margin-top: 8px; padding-top: 14px;">
+                <div class="icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10" />
+                        <circle cx="12" cy="12" r="6" />
+                        <circle cx="12" cy="12" r="2" />
+                    </svg>
+                </div>
+                <span class="text">大模型配置</span>
+            </li>
+            <li data-target="resume-settings">
+                <div class="icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                        <polyline points="14 2 14 8 20 8" />
+                        <line x1="16" y1="13" x2="8" y2="13" />
+                        <line x1="16" y1="17" x2="8" y2="17" />
+                    </svg>
+                </div>
+                <span class="text">简历管理</span>
+            </li>
+            <li data-target="question-bank"
+                style="border-top: 1px solid rgba(0,0,0,0.06); margin-top: 8px; padding-top: 14px;">
+                <div class="icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" />
+                        <path d="M9.001 7.002H15" />
+                        <path d="M9.001 11.002H15" />
+                    </svg>
+                </div>
+                <span class="text">题库管理</span>
+            </li>
+        </ul>
+        <div class="sidebar-footer">
+            <button id="btn-export-all" class="btn btn-primary">📥 导出当前全部</button>
+            <button id="btn-sync-data" class="btn btn-success" style="margin-top:10px;">🚀 强力同步爬取数据</button>
+            <button id="btn-clear-all" class="btn btn-danger" style="margin-top:10px;">🗑️ 清空所有数据</button>
+        </div>
+    </aside>
+
+    <div class="main-content">
+        <div class="topbar">
+            <div class="search-box">
+                <input type="text" id="search-input" placeholder="搜索公司、职位或福利...">
+            </div>
+            <div class="filter-box" style="gap: 15px; white-space: nowrap;">
+                <button class="btn btn-warning btn-small" id="btn-batch-ai-score">⚡ 批量 AI 诊断</button>
+                <label style="display:flex; align-items:center; cursor:pointer; font-size: 14px; white-space: nowrap;">
+                    <input type="checkbox" id="filter-favorites-only" style="margin-right:5px;"> ⭐ 只看收藏
+                </label>
+                <label
+                    style="display:flex; align-items:center; cursor:pointer; font-size: 14px; color: #e74c3c; white-space: nowrap;">
+                    <input type="checkbox" id="filter-show-blacklisted" style="margin-right:5px;"> ⛔ 显示已拉黑
+                </label>
+                <label
+                    style="display:flex; align-items:center; cursor:pointer; font-size: 14px; color: #7f8c8d; white-space: nowrap;">
+                    <input type="checkbox" id="filter-show-hidden" style="margin-right:5px;"> 👁️ 显示不合适职位
+                </label>
+            </div>
+            <div class="stats">
+                共 <span id="total-count">0</span> <span id="total-label">条数据</span>
+            </div>
+        </div>
+
+        <div id="clear-actions-bar" class="clear-actions-bar"
+            style="margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap;">
+            <button class="btn btn-primary btn-action-specific" id="btn-export-boss" data-target="boss-data"
+                style="width: auto; padding: 5px 15px; display:none; background-color: #007bff;">📥 导出 Boss 数据</button>
+            <button class="btn btn-primary btn-action-specific" id="btn-sync-boss" data-target="boss-data"
+                style="width: auto; padding: 5px 15px; display:none; background-color: #28a745;">🔄 同步详情 (影子库 ->
+                列表)</button>
+            <button class="btn btn-danger btn-clear-specific btn-action-specific" data-target="boss-data"
+                data-key="boss_scraped_v2" style="width: auto; padding: 5px 15px; display:none;">清空 Boss 列表缓存
+                (v2)</button>
+            <button class="btn btn-danger btn-clear-specific btn-action-specific" data-target="boss-data"
+                data-key="boss_single_details" style="width: auto; padding: 5px 15px; display:none;">清空 Boss 详情缓存
+                (影子库)</button>
+
+            <button class="btn btn-primary btn-action-specific" id="btn-export-zhilian" data-target="zhilian-data"
+                style="width: auto; padding: 5px 15px; display:none; background-color: #007bff;">📥 导出智联数据</button>
+            <button class="btn btn-danger btn-clear-specific btn-action-specific" data-target="zhilian-data"
+                data-key="zhilian_scraped_data_v1" style="width: auto; padding: 5px 15px; display:none;">清空智联 V1 缓存
+                (中文表头)</button>
+            <button class="btn btn-danger btn-clear-specific btn-action-specific" data-target="zhilian-data"
+                data-key="zhilian_scraped_data_v2" style="width: auto; padding: 5px 15px; display:none;">清空智联 V2 缓存
+                (原生接口)</button>
+
+            <button class="btn btn-primary btn-action-specific" id="btn-export-51job" data-target="51job-data"
+                style="width: auto; padding: 5px 15px; display:none; background-color: #007bff;">📥 导出 51job 数据</button>
+            <button class="btn btn-primary btn-action-specific" id="btn-sync-51job" data-target="51job-data"
+                style="width: auto; padding: 5px 15px; display:none; background-color: #28a745;">🔄 同步详情 (影子库 -> 列表)</button>
+            <button class="btn btn-danger btn-clear-specific btn-action-specific" data-target="51job-data"
+                data-key="51job_scraped_v2" style="width: auto; padding: 5px 15px; display:none;">清空 51job 列表缓存 (v2)</button>
+            <button class="btn btn-danger btn-clear-specific btn-action-specific" data-target="51job-data"
+                data-key="51job_single_details" style="width: auto; padding: 5px 15px; display:none;">清空 51job 详情缓存 (影子库)</button>
+
+            <button class="btn btn-primary btn-action-specific" id="btn-export-liepin" data-target="liepin-data"
+                style="width: auto; padding: 5px 15px; display:none; background-color: #007bff;">📥 导出猎聘数据</button>
+            <button class="btn btn-primary btn-action-specific" id="btn-sync-liepin" data-target="liepin-data"
+                style="width: auto; padding: 5px 15px; display:none; background-color: #28a745;">🔄 同步详情 (影子库 ->
+                列表)</button>
+            <button class="btn btn-danger btn-clear-specific btn-action-specific" data-target="liepin-data"
+                data-key="liepin_scraped_data_v1" style="width: auto; padding: 5px 15px; display:none;">清空猎聘列表缓存
+                (v1)</button>
+            <button class="btn btn-danger btn-clear-specific btn-action-specific" data-target="liepin-data"
+                data-key="liepin_single_details" style="width: auto; padding: 5px 15px; display:none;">清空猎聘详情缓存
+                (影子库)</button>
+
+            <button class="btn btn-primary btn-action-specific" id="btn-export-merged" data-target="merged-data"
+                style="width: auto; padding: 5px 15px; display:none; background-color: #9b59b6;">📥 导出合并数据</button>
+        </div>
+
+        <div class="card-grid-container" id="card-grid-container">
+            <div id="card-grid" class="card-grid">
+                <!-- 数据卡片将通过 JS 渲染 -->
+            </div>
+            <div id="empty-state" class="empty-state" style="display:none;">
+                <p>暂无数据，请先通过扩展程序去网页抓取。</p>
+            </div>
+        </div>
+
+        <!-- 原生公司维度的折叠面板容器 -->
+        <div id="company-centric-app" style="display: none; padding: 20px; box-sizing: border-box; flex: 1; overflow-y: auto;">
+            <div class="search-container">
+                <h2 style="margin: 0; color: #333;">全网合并去重 (企业视角)</h2>
+                <input type="text" id="company-search-input" placeholder="搜索公司名称、行业..." />
+            </div>
+            <div id="company-empty-state" class="empty-state" style="display: none; text-align: center; padding: 40px;">
+                <p>暂无匹配的企业数据。</p>
+            </div>
+            <div id="company-accordion" class="native-collapse">
+                <!-- 由 JS 渲染内容 -->
+            </div>
+        </div>
+
+        <div id="dashboard-container" style="display: none; padding: 20px;">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                <div
+                    style="background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                    <h3 style="margin-top:0; text-align:center;">平均薪资分布 (区间)</h3>
+                    <div
+                        style="position: relative; height: 300px; width: 100%; display: flex; justify-content: center; align-items: center;">
+                        <canvas id="chart-salary"></canvas>
+                    </div>
+                </div>
+                <div
+                    style="background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                    <h3 style="margin-top:0; text-align:center;">经验要求占比</h3>
+                    <div
+                        style="position: relative; height: 300px; width: 100%; display: flex; justify-content: center; align-items: center;">
+                        <canvas id="chart-experience"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <div
+                style="background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-top: 20px;">
+                <h3 style="margin-top:0; text-align:center;">热门技能词云 (第三方的 Wordcloud2.js)</h3>
+                <div id="chart-skills-wordcloud"
+                    style="min-height: 250px; display: flex; justify-content: center; align-items: center; padding: 20px;">
+                    <canvas id="chart-skills-wordcloud-canvas"></canvas>
+                </div>
+            </div>
+        </div>
+
+
+        <div id="kanban-container" style="display: none; height: calc(100vh - 70px); padding: 10px;">
+            <div class="kanban-board">
+                <div class="kanban-column" data-status="to-apply">
+                    <div class="kanban-column-header">待投递 <span class="count">0</span></div>
+                    <div class="kanban-cards"></div>
+                </div>
+                <div class="kanban-column" data-status="applied">
+                    <div class="kanban-column-header">已投递 <span class="count">0</span></div>
+                    <div class="kanban-cards"></div>
+                </div>
+                <div class="kanban-column" data-status="interview-1">
+                    <div class="kanban-column-header">一面 <span class="count">0</span></div>
+                    <div class="kanban-cards"></div>
+                </div>
+                <div class="kanban-column" data-status="interview-2">
+                    <div class="kanban-column-header">二面 <span class="count">0</span></div>
+                    <div class="kanban-cards"></div>
+                </div>
+                <div class="kanban-column" data-status="offer">
+                    <div class="kanban-column-header">Offer <span class="count">0</span></div>
+                    <div class="kanban-cards"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 模型配置容器 -->
+        <div id="model-settings-container" style="display: none; padding: 20px; height: 100%; box-sizing: border-box;">
+            <div
+                style="display: flex; height: 100%; gap: 0; background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); overflow: hidden;">
+
+                <!-- 左侧：模型配置列表 -->
+                <div
+                    style="width: 250px; background: #fcfcfc; border-right: 1px solid #f0f0f0; display: flex; flex-direction: column;">
+                    <div
+                        style="padding: 16px; border-bottom: 1px solid #f0f0f0; display: flex; justify-content: space-between; align-items: center;">
+                        <h3 style="margin: 0; font-size: 16px; color: #333; font-weight: 600;">模型平台</h3>
+                        <button id="btn-add-ai-profile"
+                            style="background: transparent; border: none; font-size: 20px; color: #007bff; cursor: pointer; padding: 0 4px; display: flex; align-items: center; justify-content: center;"
+                            title="新增平台配置">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                stroke-linejoin="round">
+                                <line x1="12" y1="5" x2="12" y2="19" />
+                                <line x1="5" y1="12" x2="19" y2="12" />
+                            </svg>
+                        </button>
+                    </div>
+                    <div id="ai-profile-list" style="flex: 1; overflow-y: auto; padding: 8px;">
+                        <!-- Profile items generated by JS -->
+                    </div>
+                </div>
+
+                <!-- 右侧：当前选中的模型配置表单 -->
+                <div style="flex: 1; padding: 32px; overflow-y: auto; display: flex; flex-direction: column;">
+                    <div
+                        style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px;">
+                        <div>
+                            <h2 style="margin: 0 0 8px 0; font-size: 24px; color: #333;">配置详情</h2>
+                            <p style="margin: 0; color: #666; font-size: 14px;">配置兼容 OpenAI 格式的 API 接口，支持多平台切换使用。</p>
+                        </div>
+                        <button id="btn-delete-ai-profile"
+                            style="background: transparent; border: 1px solid #dc3545; color: #dc3545; border-radius: 6px; padding: 6px 16px; cursor: pointer; display: none; font-size: 13px;">删除此配置</button>
+                    </div>
+
+                    <div class="config-form" style="max-width: 600px;">
+                        <div class="input-group">
+                            <label class="input-label" for="ai-profile-name">配置名称</label>
+                            <input type="text" class="api-input" id="ai-profile-name"
+                                placeholder="例如: DeepSeek, 阿里通义千问, 本地模型">
+                        </div>
+                        <div class="input-group">
+                            <label class="input-label" for="ai-api-url">API Base URL</label>
+                            <input type="text" class="api-input" id="ai-api-url"
+                                placeholder="https://api.deepseek.com/v1">
+                        </div>
+                        <div class="input-group">
+                            <label class="input-label" for="ai-model">模型名称</label>
+                            <input type="text" class="api-input" id="ai-model" placeholder="deepseek-chat">
+                        </div>
+                        <div class="input-group">
+                            <label class="input-label" for="ai-api-key">API Key</label>
+                            <input type="password" class="api-input" id="ai-api-key" placeholder="sk-...">
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 32px; display: flex; gap: 12px; max-width: 600px;">
+                        <button id="btn-test-ai" class="btn-primary"
+                            style="flex: 1; padding: 12px; border: none; border-radius: 8px; font-weight: 500; cursor: pointer; background: #fff; border: 1px solid #ddd; color: #333;">测试连接</button>
+                        <button id="btn-save-model-settings" class="btn-primary"
+                            style="flex: 1; padding: 12px; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">保存配置</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 简历管理容器 -->
+        <div id="resume-settings-container" style="display: none; height: 100%; width: 100%; flex-direction: column;">
+            <div class="settings-card" style="height: 100%; box-sizing: border-box;">
+                <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 24px;">
+                    <div class="settings-card-icon icon-resume" style="margin-bottom: 0;">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                            <polyline points="14 2 14 8 20 8" />
+                            <line x1="16" y1="13" x2="8" y2="13" />
+                            <line x1="16" y1="17" x2="8" y2="17" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h2 class="settings-card-title" style="margin-bottom: 4px;">简历管理</h2>
+                        <p class="settings-card-desc" style="margin-bottom: 0; min-height: auto;">你的简历内容将用于 AI
+                            匹配度打分和生成个性化打招呼语。请确保信息准确完整。</p>
+                    </div>
+                </div>
+
+                <div class="resume-editor-wrapper" style="flex: 1; min-height: 0; margin-bottom: 16px;">
+                    <textarea id="ai-resume" class="resume-editor" style="height: 100%; box-sizing: border-box;"
+                        placeholder="在此处粘贴或编辑你的简历内容...&#10;&#10;建议包含：教育经历、工作经历、项目经验、技能特长等。"></textarea>
+                </div>
+
+                <p class="helper-text" style="margin-top: 0; margin-bottom: 24px;">
+                    使用建议：请确保简历信息真实、详细，包含与目标岗位相关的技能和经验，这将有助于 AI 更准确地进行评分。
+                </p>
+
+                <div class="action-area" style="display: flex; justify-content: flex-end;">
+                    <button id="btn-save-resume-settings" class="btn-save btn-primary"
+                        style="padding: 10px 32px; border: none; border-radius: 6px; cursor: pointer;">保存简历</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 题库管理容器 -->
+        <div id="question-bank-container"
+            style="display: none; padding: 20px; height: 100%; box-sizing: border-box; overflow-y: auto;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2 style="margin: 0; display: flex; align-items: center; gap: 8px;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" />
+                        <path d="M9.001 7.002H15" />
+                        <path d="M9.001 11.002H15" />
+                    </svg>
+                    题库管理
+                </h2>
+                <div>
+                    <input type="text" id="qb-search-input" placeholder="搜索题干或标签..."
+                        style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; margin-right: 10px; width: 250px;">
+                    <input type="file" id="qb-import-excel" accept=".xlsx, .xls" style="display: none;">
+                    <button id="btn-import-excel" class="btn-primary"
+                        style="padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; background: #28a745; margin-right: 10px;">📥
+                        导入 Excel</button>
+                    <button id="btn-add-question" class="btn-primary"
+                        style="padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; margin-right: 10px;">➕
+                        新增题目</button>
+                    <button id="btn-clear-question-bank" class="btn-primary"
+                        style="padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; background: #dc3545;">🗑️
+                        清空题库</button>
+                </div>
+            </div>
+
+            <div id="qb-table-container"
+                style="background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden; display: none;">
+                <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 14px;">
+                    <thead>
+                        <tr style="background: #f8f9fa; border-bottom: 2px solid #eee; color: #555;">
+                            <th style="padding: 12px 16px; width: 60px;">序号</th>
+                            <th style="padding: 12px 16px; width: 35%;">面试题目</th>
+                            <th style="padding: 12px 16px; width: 12%;">主题分类</th>
+                            <th style="padding: 12px 16px; width: 12%;">二级分类</th>
+                            <th style="padding: 12px 16px; width: 20%;">标签</th>
+                            <th style="padding: 12px 16px;">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="qb-list-body">
+                        <!-- 题目列表通过JS渲染 -->
+                    </tbody>
+                </table>
+            </div>
+            <div id="qb-empty-state" class="empty-state"
+                style="display:none; text-align: center; padding: 40px; color: #888;">
+                <p>题库为空，点击右上角“新增题目”开始积累吧！</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 同步选择模态窗 -->
+    <div id="sync-modal" class="modal-overlay">
+        <div class="modal-content" style="width: 500px; height: auto; min-height: 250px; margin: auto;">
+            <div class="modal-header" style="padding: 15px 20px;">
+                <div class="modal-title-group">
+                    <h2 style="margin:0; font-size: 18px;">🔄 选择要同步的数据</h2>
+                </div>
+                <button class="modal-close" id="sync-modal-close" style="padding: 0; line-height: 1;">×</button>
+            </div>
+            <div class="modal-body" style="padding: 20px;">
+                <p style="margin-top: 0; margin-bottom: 15px; color: #666; font-size: 14px;">请勾选需要同步到本地服务器的数据文件。未勾选的数据将不会被同步。</p>
+                <div id="sync-options-list" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; max-height: 400px; overflow-y: auto;">
+                    <!-- JS动态渲染 -->
+                </div>
+            </div>
+            <div class="modal-footer" style="padding: 15px 20px; display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid #eee;">
+                <button class="btn btn-block" id="btn-sync-cancel" style="width: auto; padding: 6px 16px;">取消</button>
+                <button class="btn btn-success" id="btn-sync-confirm" style="width: auto; padding: 6px 16px; background-color: #28a745; color: white;">确认同步</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 详情模态弹窗 (Split UI) -->
+    <div id="detail-modal" class="modal-overlay">
+        <div class="job-detail-modal">
+            <div class="modal-content modal-content-split">
+                <!-- 额外的关闭按钮 -->
+                <button id="modal-close-btn" class="modal-close extra" title="关闭">×</button>
+
+                <div class="modal-body modal-body-split">
+                    <!-- 左侧：岗位信息 -->
+                    <div class="job-info-panel">
+                        <div class="job-header">
+                            <div
+                                style="display: flex; justify-content: space-between; align-items: flex-start; gap: 15px; margin-bottom: 12px;">
+                                <h1 class="job-title" id="modal-title"
+                                    style="margin: 0; font-size: 22px; font-weight: 600; color: #1e293b; line-height: 1.3;">
+                                    职位名称</h1>
+                                <span class="salary-tag" id="modal-salary"
+                                    style="font-size: 20px; font-weight: bold; color: #0088fb; white-space: nowrap; margin: 0;">薪资</span>
+                            </div>
+                            <div class="job-sub-info"
+                                style="display: flex; flex-direction: column; align-items: flex-start; gap: 6px;">
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#64748b"
+                                        stroke-width="2">
+                                        <path stroke-linecap="round" stroke-linejoin="round"
+                                            d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4">
+                                        </path>
+                                    </svg>
+                                    <span id="modal-company"
+                                        style="font-size: 14px; color: #475569; font-weight: 500;">公司名称</span>
+                                    <span style="color: #cbd5e1; margin: 0 4px;">|</span>
+                                    <span id="modal-working-location"
+                                        style="font-size: 14px; color: #475569;">工作地点</span>
+                                </div>
+                                <div style="display: flex; align-items: flex-start; gap: 6px;">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#64748b"
+                                        stroke-width="2" style="flex-shrink: 0; margin-top: 3px;">
+                                        <path stroke-linecap="round" stroke-linejoin="round"
+                                            d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z">
+                                        </path>
+                                        <path stroke-linecap="round" stroke-linejoin="round"
+                                            d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                    </svg>
+                                    <span id="modal-address"
+                                        style="font-size: 13px; color: #64748b; line-height: 1.5;">地点</span>
+                                </div>
+                            </div>
+                            <div class="job-badges"
+                                style="margin-top: 16px; display: flex; gap: 10px; flex-wrap: wrap;">
+                                <span class="icon-badge" id="modal-badge-exp"
+                                    style="display: flex; align-items: center; gap: 4px; background: #F1F5F9; color: #475569; padding: 4px 10px; border-radius: 6px; font-size: 13px; font-weight: 500;">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                        stroke-width="2">
+                                        <path stroke-linecap="round" stroke-linejoin="round"
+                                            d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z">
+                                        </path>
+                                    </svg>
+                                    <span id="modal-exp-val">不限</span>
+                                </span>
+                                <span class="icon-badge" id="modal-badge-edu"
+                                    style="display: flex; align-items: center; gap: 4px; background: #F1F5F9; color: #475569; padding: 4px 10px; border-radius: 6px; font-size: 13px; font-weight: 500;">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                        stroke-width="2">
+                                        <path stroke-linecap="round" stroke-linejoin="round"
+                                            d="M12 14l9-5-9-5-9 5 9 5z"></path>
+                                        <path stroke-linecap="round" stroke-linejoin="round"
+                                            d="M12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z">
+                                        </path>
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 14v7"></path>
+                                    </svg>
+                                    <span id="modal-edu-val">不限</span>
+                                </span>
+                                <span class="icon-badge" id="modal-badge-source"
+                                    style="display: flex; align-items: center; gap: 4px; background: #F1F5F9; color: #475569; padding: 4px 10px; border-radius: 6px; font-size: 13px; font-weight: 500;">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                        stroke-width="2">
+                                        <path stroke-linecap="round" stroke-linejoin="round"
+                                            d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9">
+                                        </path>
+                                    </svg>
+                                    <span id="modal-source-val">未知来源</span>
+                                </span>
+                            </div>
+                        </div>
+
+                        <div class="info-section-title">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4">
+                                </path>
+                            </svg>
+                            岗位概览
+                        </div>
+                        <div class="stats-bar-group">
+                            <!-- 公司信息 -->
+                            <div class="stats-bar">
+                                <div class="stat-item">
+                                    <span class="stat-label">所属行业</span>
+                                    <span class="stat-value" id="modal-industry">未知</span>
+                                </div>
+                                <div class="stat-divider"></div>
+                                <div class="stat-item">
+                                    <span class="stat-label">公司阶段</span>
+                                    <span class="stat-value" id="modal-stage">未知</span>
+                                </div>
+                                <div class="stat-divider"></div>
+                                <div class="stat-item">
+                                    <span class="stat-label">人员规模</span>
+                                    <span class="stat-value" id="modal-scale">未知</span>
+                                </div>
+                            </div>
+
+                            <!-- 招聘人员信息 -->
+                            <div class="stats-bar">
+                                <div class="stat-item">
+                                    <span class="stat-label">招聘人员</span>
+                                    <span class="stat-value" id="modal-hr-name">未知</span>
+                                </div>
+                                <div class="stat-divider"></div>
+                                <div class="stat-item">
+                                    <span class="stat-label">招聘职位</span>
+                                    <span class="stat-value" id="modal-hr-title">未知</span>
+                                </div>
+                                <div class="stat-divider"></div>
+                                <div class="stat-item" style="flex: 2;">
+                                    <span class="stat-label">所属公司</span>
+                                    <span class="stat-value" id="modal-hr-company">未知</span>
+                                </div>
+                            </div>
+
+                            <!-- 日期信息 -->
+                            <div class="stats-bar">
+                                <div class="stat-item">
+                                    <span class="stat-label">发布日期</span>
+                                    <span class="stat-value" id="modal-issue-time">未知</span>
+                                </div>
+                                <div class="stat-divider"></div>
+                                <div class="stat-item">
+                                    <span class="stat-label">更新日期</span>
+                                    <span class="stat-value" id="modal-update-time">未知</span>
+                                </div>
+                                <div class="stat-divider"></div>
+                                <div class="stat-item">
+                                    <span class="stat-label">采集日期</span>
+                                    <span class="stat-value" id="modal-create-time">未知</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="info-section-title" id="modal-welfare-title" style="display: none;">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7">
+                                </path>
+                            </svg>
+                            福利待遇
+                        </div>
+                        <div class="tags-group" id="modal-welfare-tags"></div>
+
+                        <div class="info-section-title">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z">
+                                </path>
+                            </svg>
+                            岗位职责与要求
+                        </div>
+                        <div class="description-block">
+                            <p class="desc-text" id="modal-desc"></p>
+                        </div>
+
+                        <div class="info-section-title" id="modal-skills-title" style="display: none;">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z">
+                                </path>
+                            </svg>
+                            技能标签
+                        </div>
+                        <div class="tags-group" id="modal-skills-tags"></div>
+
+                        <div style="margin-top: 20px;">
+                            <a id="modal-link-btn" href="#" target="_blank" class="btn btn-primary"
+                                style="text-decoration:none;">🔗 查看原网页</a>
+                        </div>
+                    </div>
+
+                    <!-- 右侧：AI评分内容 -->
+                    <div class="ai-score-panel">
+                        <div id="ai-score-container" style="display: none;">
+                            <!-- 评分卡片 -->
+                            <div class="ai-score-card" id="ai-score-card">
+                                <div id="ai-score-circle" class="score-circle">
+                                    <span class="score-num" id="ai-score-num">--</span>
+                                    <span class="score-label">分</span>
+                                </div>
+                                <div class="score-meta">
+                                    <h3>AI 匹配度评分 <span class="badge-reject" id="ai-match-level">未知</span></h3>
+                                    <p id="ai-score-time">最新评分</p>
+                                </div>
+                            </div>
+
+                            <!-- 分析列表 -->
+                            <div class="analysis-section">
+                                <h4>
+                                    <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                            d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z">
+                                        </path>
+                                    </svg>
+                                    详细分析
+                                </h4>
+                                <div class="ai-analysis-content" id="ai-analysis-content">
+                                </div>
+                            </div>
+
+                            <!-- 自我介绍生成器 -->
+                            <div class="generator-card">
+                                <div class="generator-header" style="justify-content: space-between; width: 100%;">
+                                    <div style="display: flex; align-items: center; gap: 8px;">
+                                        <svg width="18" height="18" fill="none" stroke="currentColor"
+                                            viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                                d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                                        </svg>
+                                        AI 自我介绍生成
+                                    </div>
+                                    <div id="intro-header-actions" style="display: none; gap: 8px;">
+                                        <button class="icon-btn" id="btn-copy-intro" title="复制话术"
+                                            style="cursor: pointer; background: transparent; border: none; font-size: 16px; color: #5f6368; transition: color 0.2s;">📋</button>
+                                        <button class="icon-btn" id="btn-regenerate-intro" title="重新生成"
+                                            style="cursor: pointer; background: transparent; border: none; font-size: 16px; color: #5f6368; transition: color 0.2s;">🔄</button>
+                                    </div>
+                                </div>
+                                <div id="introduction-container"
+                                    style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden;">
+                                    <div class="generator-desc" id="generator-desc">
+                                        <p>让 AI 为您生成一份专业且有针对性的打招呼语，提高回复率。</p>
+                                        <button class="btn btn-primary" id="btn-generate-intro">
+                                            ✨ 生成自我介绍
+                                        </button>
+                                    </div>
+                                    <div class="introduction-content" id="introduction-content"
+                                        style="display: none; margin-top: 0;">
+                                        <div class="introduction-text" id="introduction-text"
+                                            style="white-space: pre-wrap;"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="ai-no-score-container"
+                            style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%;">
+                            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1"
+                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                                style="margin-bottom: 16px;">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <line x1="12" y1="8" x2="12" y2="12"></line>
+                                <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 面试日历与复盘弹窗 -->
+    <div id="interview-modal" class="modal-overlay">
+        <div class="modal-content" style="max-width: 700px; height: 85vh; display: flex; flex-direction: column;">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2>📅 面试安排与复盘: <span id="interview-job-title" style="font-weight: normal; color: #555;"></span>
+                    </h2>
+                </div>
+                <button id="interview-modal-close-btn" class="modal-close">&times;</button>
+            </div>
+
+            <div class="modal-body" style="flex: 1; overflow-y: auto;">
+                <div class="modal-section" style="margin-bottom: 20px;">
+                    <h3>🤖 AI 解析面试邀请</h3>
+                    <textarea id="interview-raw-text" class="form-input" rows="4"
+                        style="width: 100%; margin-bottom: 10px;"
+                        placeholder="请在此粘贴HR发送的面试邀请内容（例如：明天下午2点在腾讯会议123-456面试，面试官是张三）..."></textarea>
+                    <button id="btn-ai-parse-interview" class="btn btn-ai" style="width: 100%;">✨ 智能解析并填充下方表单</button>
+                    <div id="interview-ai-loading"
+                        style="display: none; text-align: center; color: #9b59b6; margin-top: 10px; font-size: 13px;">
+                        大模型正在燃烧 GPU...</div>
+                </div>
+
+                <div class="modal-section"
+                    style="margin-bottom: 20px; background: #f8f9fa; padding: 15px; border-radius: 6px;">
+                    <h3>📍 面试详情表单</h3>
+                    <div class="modal-grid">
+                        <div>
+                            <label
+                                style="display: block; font-weight: bold; margin-bottom: 5px; font-size: 13px;">开始时间</label>
+                            <input type="datetime-local" id="interview-start-time" class="form-input"
+                                style="width: 100%;">
+                        </div>
+                        <div>
+                            <label style="display: block; font-weight: bold; margin-bottom: 5px; font-size: 13px;">结束时间
+                                (默认+1小时)</label>
+                            <input type="datetime-local" id="interview-end-time" class="form-input"
+                                style="width: 100%;">
+                        </div>
+                    </div>
+                    <div style="margin-top: 10px;">
+                        <label style="display: block; font-weight: bold; margin-bottom: 5px; font-size: 13px;">面试地点 /
+                            会议链接</label>
+                        <input type="text" id="interview-location" class="form-input" style="width: 100%;">
+                    </div>
+                    <div style="margin-top: 10px;">
+                        <label style="display: block; font-weight: bold; margin-bottom: 5px; font-size: 13px;">面试官 /
+                            备注</label>
+                        <input type="text" id="interview-notes" class="form-input" style="width: 100%;">
+                    </div>
+                    <div style="margin-top: 15px; text-align: right;">
+                        <button id="btn-export-ics" class="btn btn-primary" style="background: #3498db;">📥 导出系统日历
+                            (.ics)</button>
+                    </div>
+                </div>
+
+                <div class="modal-section" style="margin-bottom: 20px;">
+                    <h3>📝 阶段性复盘 (Debrief)</h3>
+                    <textarea id="interview-debrief" class="form-input" rows="8" style="width: 100%;"
+                        placeholder="面试结束啦？在这里记录下面试中被问到的核心问题、自己的不足、以及下阶段的改进点吧..."></textarea>
+                </div>
+            </div>
+
+            <div class="modal-footer" style="padding: 15px; border-top: 1px solid #eee; text-align: right;">
+                <button id="btn-save-interview" class="btn btn-primary" style="background: #2ecc71;">💾 保存记录</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="wordcloud2.js"></script>
+    <!-- 题库编辑弹窗 -->
+    <div id="qb-modal" class="modal-overlay" style="display: none;">
+        <div class="job-detail-modal" style="width: 800px; max-width: 90vw;">
+            <div class="modal-content"
+                style="padding: 24px; display: flex; flex-direction: column; gap: 16px; background: white; border-radius: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h2 id="qb-modal-title" style="margin: 0; font-size: 20px;">新增题目</h2>
+                    <button id="qb-modal-close" class="modal-close"
+                        style="position: static; font-size: 24px;">×</button>
+                </div>
+
+                <div style="display: flex; gap: 12px;">
+                    <div style="flex: 0 0 80px;">
+                        <label style="display: block; font-weight: 500; margin-bottom: 8px;">序号</label>
+                        <input type="text" id="qb-input-serial"
+                            style="width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px;"
+                            placeholder="例如: 1">
+                    </div>
+                    <div style="flex: 1;">
+                        <label style="display: block; font-weight: 500; margin-bottom: 8px;">题干</label>
+                        <textarea id="qb-input-title"
+                            style="width: 100%; box-sizing: border-box; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 16px; font-family: inherit; resize: vertical;"
+                            rows="2" placeholder="请输入面试题目..."></textarea>
+                    </div>
+                </div>
+
+                <div style="display: flex; gap: 12px;">
+                    <div style="flex: 1;">
+                        <label style="display: block; font-weight: 500; margin-bottom: 8px;">主题分类</label>
+                        <input type="text" id="qb-input-theme"
+                            style="width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px;"
+                            placeholder="例如: 前端">
+                    </div>
+                    <div style="flex: 1;">
+                        <label style="display: block; font-weight: 500; margin-bottom: 8px;">二级分类</label>
+                        <input type="text" id="qb-input-sub"
+                            style="width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px;"
+                            placeholder="例如: JavaScript">
+                    </div>
+                    <div style="flex: 1;">
+                        <label style="display: block; font-weight: 500; margin-bottom: 8px;">标签 (逗号分隔)</label>
+                        <input type="text" id="qb-input-tags"
+                            style="width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px;"
+                            placeholder="例如: 闭包, 高频">
+                    </div>
+                </div>
+
+                <div style="flex: 1; display: flex; flex-direction: column; gap: 8px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <label style="font-weight: 500;">答案解析</label>
+                        <button id="btn-qb-ai-answer" class="btn-warning btn-small" style="font-size: 12px;">🤖 AI 帮我答
+                            (结合简历)</button>
+                    </div>
+                    <textarea id="qb-input-answer"
+                        style="flex: 1; min-height: 200px; width: 100%; box-sizing: border-box; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; font-family: inherit; resize: vertical;"
+                        placeholder="在此输入你的答案或让 AI 生成..."></textarea>
+                </div>
+
+                <div style="display: flex; justify-content: flex-end; gap: 12px; margin-top: 16px;">
+                    <button id="btn-qb-delete" class="btn-danger"
+                        style="display: none; margin-right: auto; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer;">🗑️
+                        删除此题</button>
+                    <button id="btn-qb-cancel" class="btn-block"
+                        style="padding: 8px 16px; border: 1px solid #ddd; border-radius: 6px; cursor: pointer; background: white;">取消</button>
+                    <button id="btn-qb-save" class="btn-primary"
+                        style="padding: 8px 24px; border: none; border-radius: 6px; cursor: pointer;">保存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 模态框：标签管理 -->
+    <div id="tag-modal" class="modal"
+        style="display:none; position: fixed; z-index: 2000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); align-items: center; justify-content: center;">
+        <div class="modal-content tag-modal-content"
+            style="background-color: #fefefe; padding: 20px; border: 1px solid #888; width: 400px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); max-height: 90vh; overflow-y: auto;">
+            <span class="close-modal" id="close-tag-modal"
+                style="color: #aaa; float: right; font-size: 28px; font-weight: bold; cursor: pointer;">&times;</span>
+            <h3 style="margin-top: 0; color: #2c3e50;">标记为不合适</h3>
+            <p style="color: #7f8c8d; font-size: 14px; margin-bottom: 15px;">选择或输入不合适的原因：</p>
+            <div class="predefined-tags" style="display: flex; flex-wrap: wrap; gap: 8px;">
+                <button class="tag-btn"
+                    style="padding: 6px 12px; border: 1px solid #ddd; background: #fff; border-radius: 4px; cursor: pointer;">学历不符</button>
+                <button class="tag-btn"
+                    style="padding: 6px 12px; border: 1px solid #ddd; background: #fff; border-radius: 4px; cursor: pointer;">经验不符</button>
+                <button class="tag-btn"
+                    style="padding: 6px 12px; border: 1px solid #ddd; background: #fff; border-radius: 4px; cursor: pointer;">薪资太低</button>
+                <button class="tag-btn"
+                    style="padding: 6px 12px; border: 1px solid #ddd; background: #fff; border-radius: 4px; cursor: pointer;">外包岗位</button>
+                <button class="tag-btn"
+                    style="padding: 6px 12px; border: 1px solid #ddd; background: #fff; border-radius: 4px; cursor: pointer;">距离太远</button>
+                <button class="tag-btn"
+                    style="padding: 6px 12px; border: 1px solid #ddd; background: #fff; border-radius: 4px; cursor: pointer;">需要外语</button>
+            </div>
+            <div style="margin-top: 15px;">
+                <input type="text" id="custom-tag-input" placeholder="其他原因 (按回车添加)"
+                    style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;">
+            </div>
+            <div id="selected-tags-container" style="margin-top: 15px; display: flex; flex-wrap: wrap; gap: 8px;">
+                <!-- 动态显示选中的标签 -->
+            </div>
+            <div style="margin-top: 25px; display: flex; justify-content: flex-end; gap: 10px;">
+                <button id="cancel-tag-btn"
+                    style="padding: 8px 16px; border-radius: 4px; cursor: pointer; border: 1px solid #ddd; background: #f9f9f9; color: #333;">取消</button>
+                <button id="save-tag-btn"
+                    style="padding: 8px 16px; border-radius: 4px; cursor: pointer; border: none; background: #e74c3c; color: white; font-weight: bold;">保存并隐藏</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="options.js"></script>
+</body>
+
+</html>

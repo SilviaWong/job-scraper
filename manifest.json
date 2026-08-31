@@ -1,0 +1,177 @@
+{
+  "manifest_version": 3,
+  "name": "统一招聘数据提取助手",
+  "version": "1.2",
+  "description": "全自动提取BOSS直聘、猎聘、51job、智联招聘等平台的职位详情数据，一键导出为CSV格式。",
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "scripting",
+    "tabs",
+    "notifications",
+    "sidePanel",
+    "downloads"
+  ],
+  "host_permissions": [
+    "*://*.zhipin.com/*",
+    "*://*.liepin.com/*",
+    "*://*.51job.com/*",
+    "*://*.zhaopin.com/*"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "打开招聘数据抓取面板",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "popup/popup.html"
+  },
+  "options_page": "options/options.html",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.zhipin.com/*"
+      ],
+      "js": [
+        "content_scripts/boss_interceptor.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "*://*.zhipin.com/*"
+      ],
+      "js": [
+        "content_scripts/boss_isolated.js"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "matches": [
+        "*://*.51job.com/*"
+      ],
+      "js": [
+        "content_scripts/51job_interceptor.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "*://*.51job.com/*"
+      ],
+      "js": [
+        "content_scripts/51job_isolated.js"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "*://c.liepin.com/*"
+      ],
+      "js": [
+        "content_scripts/liepin_home_interceptor.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "*://c.liepin.com/*"
+      ],
+      "js": [
+        "content_scripts/liepin_home_isolated.js"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "*://www.liepin.com/*"
+      ],
+      "js": [
+        "content_scripts/liepin_search_interceptor.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "*://www.liepin.com/*"
+      ],
+      "js": [
+        "content_scripts/liepin_search_isolated.js"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "*://www.liepin.com/company/*"
+      ],
+      "js": [
+        "content_scripts/liepin_company_isolated.js"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "*://*.zhaopin.com/*"
+      ],
+      "js": [
+        "content_scripts/zhilian_interceptor.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "*://*.zhaopin.com/*"
+      ],
+      "js": [
+        "content_scripts/zhilian_new_isolated.js"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "http://localhost:3000/*",
+        "http://127.0.0.1:3000/*"
+      ],
+      "js": [
+        "content_scripts/dashboard_isolated.js"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    }
+  ]
+}

@@ -1,0 +1,418 @@
+(function() {
+    'use strict';
+
+    // ==========================================
+    // LIEPIN ISOLATED WORLD LOGIC
+    // ==========================================
+
+    // --- Worker 模式：详情页 DOM 提取 ---
+    if (window !== window.parent && (location.href.includes('/job/') || location.href.includes('/a/'))) {
+        console.log("🤖 [Iframe] 检测到猎聘职位详情页，准备提取 DOM 数据...");
+        let retries = 0;
+        const timer = setInterval(() => {
+            retries++;
+            const descNode = document.querySelector('[data-selector="job-intro-content"]');
+            
+            if (descNode) {
+                clearInterval(timer);
+                let description = descNode.innerText || "";
+                
+                window.parent.postMessage({
+                    type: 'LIEPIN_DETAIL_DATA',
+                    jobId: location.href.match(/\/(?:job|a)\/([a-zA-Z0-9_]+)\.shtml/)?.[1] || location.href,
+                    description: description
+                }, '*');
+            } else if (retries > 30) { // 等待约 15 秒
+                clearInterval(timer);
+                window.parent.postMessage({
+                    type: 'LIEPIN_DETAIL_DATA_ERROR',
+                    jobId: location.href.match(/\/(?:job|a)\/([a-zA-Z0-9_]+)\.shtml/)?.[1] || location.href,
+                    error: "Timeout finding job-intro-content"
+                }, '*');
+            }
+        }, 500);
+        return; // Worker 不执行 Master 逻辑
+    }
+
+    // --- Master 模式 ---
+    let isRunning = false;
+    let isAutoPage = true;
+    let currentList = [];
+    let currentIndex = 0;
+    
+    let scrapedData = [];
+    let scrapedIds = new Set();
+    let sessionProcessedIds = new Set();
+    let activeIframe = null;
+    let jobsScrapedSinceRest = 0;
+
+    // 工具函数
+    function cleanStr(str) {
+        if (str === null || str === undefined) return '';
+        return String(str).replace(/[\r\n]+/g, ' ').replace(/"/g, '""').replace(/,/g, '，').trim();
+    }
+    
+    function cleanMultiLineStr(str) {
+        if (!str) return '';
+        return String(str).replace(/"/g, '""').trim();
+    }
+
+    function getRandomInt(min, max) {
+        return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+
+    // 与 Background 通信 (读写数据)
+    function loadCache(callback) {
+        chrome.runtime.sendMessage({ action: 'getData', key: 'liepin_scraped_data_v1' }, (response) => {
+            if (response && response.data) {
+                scrapedData = response.data;
+                scrapedIds = new Set(scrapedData.map(d => String(d['职位ID'])));
+            } else {
+                scrapedData = [];
+                scrapedIds = new Set();
+            }
+            if (callback) callback();
+        });
+    }
+
+    function saveCache(callback) {
+        chrome.runtime.sendMessage({ 
+            action: 'saveData', 
+            key: 'liepin_scraped_data_v1', 
+            data: scrapedData 
+        }, () => {
+            notifyPopupStatus('已保存');
+            if (callback) callback();
+        });
+    }
+
+    function notifyPopupStatus(statusText) {
+        chrome.runtime.sendMessage({ 
+            action: 'liepin_update_status', 
+            status: statusText 
+        });
+        chrome.runtime.sendMessage({ 
+            action: 'liepin_update_count', 
+            count: scrapedData.length 
+        });
+    }
+
+    // 数据查重/更新插入
+    function upsertData(jobId, row, callback) {
+        const today = new Date();
+        const yyyy = today.getFullYear();
+        const mm = String(today.getMonth() + 1).padStart(2, '0');
+        const dd = String(today.getDate()).padStart(2, '0');
+        const todayStr = `${yyyy}-${mm}-${dd}`;
+
+        const existingIndex = scrapedData.findIndex(d => String(d['职位ID']) === String(jobId));
+        if (existingIndex >= 0) {
+            const oldRow = scrapedData[existingIndex];
+            row['职位描述'] = row['职位描述'] || oldRow['职位描述'];
+            row['创建时间'] = oldRow['创建时间'] || todayStr;
+            row['更新时间'] = todayStr;
+            scrapedData[existingIndex] = row;
+        } else {
+            row['创建时间'] = todayStr;
+            row['更新时间'] = todayStr;
+            scrapedData.push(row);
+        }
+        scrapedIds.add(String(jobId));
+        saveCache(callback);
+    }
+
+    // 监听 Popup 消息
+    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+        if (request.action === 'liepin_start') {
+            isAutoPage = request.autoScroll;
+            sessionProcessedIds.clear();
+            if (!isRunning) {
+                loadCache(() => {
+                    startScraping();
+                });
+            }
+        } else if (request.action === 'liepin_stop') {
+            isRunning = false;
+            if (activeIframe) {
+                activeIframe.remove();
+                activeIframe = null;
+            }
+            if (window.__CURRENT_IFRAME_TIMEOUT__) {
+                clearTimeout(window.__CURRENT_IFRAME_TIMEOUT__);
+                window.__CURRENT_IFRAME_TIMEOUT__ = null;
+            }
+            notifyPopupStatus('已暂停');
+        } else if (request.action === 'liepin_clear') {
+            scrapedData = [];
+            scrapedIds.clear();
+            sessionProcessedIds.clear();
+            saveCache();
+        } else if (request.action === 'liepin_get_status') {
+            sendResponse({ isRunning, status: isRunning ? '正在运行...' : '闲置' });
+        }
+    });
+
+    // 监听 MAIN World 和 Iframe 拦截到的数据
+    window.addEventListener('message', (event) => {
+        if (event.data && event.data.type === 'LIEPIN_LIST_DATA') {
+            window.__LIEPIN_LIST_DATA__ = event.data.data;
+            console.log("📥 [隔离层] 接收到猎聘列表数据:", event.data.data.length, "条");
+        } else if (event.data && event.data.type === 'LIEPIN_DETAIL_DATA') {
+            handleDetailData(event.data.jobId, event.data.description);
+        } else if (event.data && event.data.type === 'LIEPIN_DETAIL_DATA_ERROR') {
+            handleDetailDataError(event.data.jobId);
+        }
+    });
+
+    // ==========================================
+    // 列表页 (Master) 逻辑
+    // ==========================================
+    function startScraping() {
+        if (!window.__LIEPIN_LIST_DATA__ || window.__LIEPIN_LIST_DATA__.length === 0) {
+            alert('未发现猎聘职位列表数据！请先进行职位搜索或刷新页面。');
+            isRunning = false;
+            notifyPopupStatus('出错: 无数据');
+            return;
+        }
+
+        currentList = window.__LIEPIN_LIST_DATA__.filter(j => !sessionProcessedIds.has(j.job?.jobId) && !scrapedIds.has(String(j.job?.jobId)));
+        currentIndex = 0;
+        isRunning = true;
+
+        if (currentList.length === 0) {
+            if (isAutoPage) goToNextPage();
+            else { alert('当前可见职位已抓取完毕！'); isRunning = false; notifyPopupStatus('完毕'); }
+            return;
+        }
+
+        processNext();
+    }
+
+    function processNext() {
+        if (!isRunning) return;
+
+        if (currentIndex >= currentList.length) {
+            if (activeIframe) { activeIframe.remove(); activeIframe = null; }
+            if (isAutoPage) goToNextPage();
+            else { alert('🎉 本页所有职位抓取完毕！'); isRunning = false; notifyPopupStatus('完毕'); }
+            return;
+        }
+
+        const currentJobItem = currentList[currentIndex];
+        const job = currentJobItem.job || {};
+        const comp = currentJobItem.comp || {};
+        const recruiter = currentJobItem.recruiter || {};
+        
+        sessionProcessedIds.add(job.jobId);
+        notifyPopupStatus(`抓取第 ${currentIndex + 1}/${currentList.length}`);
+
+        // 统一 Boss 字段格式进行浅层抓取保存
+        const row = {
+            '平台': 'Liepin',
+            '职位ID': cleanStr(job.jobId),
+            '职位名称': cleanStr(job.title),
+            '工作地点': cleanStr(job.dq),
+            '详细地址': cleanStr(job.dq),
+            '薪资待遇': cleanStr(job.salary),
+            '工作经验': cleanStr(job.requireWorkYears),
+            '学历要求': cleanStr(job.requireEduLevel),
+            '职位描述': '', // 需要 iframe 深层抓取
+            '技能标签': job.labels ? job.labels.join(',') : '', // 猎聘标签
+            'HR_ID': cleanStr(recruiter.recruiterId || recruiter.imId),
+            'HR姓名': cleanStr(recruiter.recruiterName),
+            'HR职位': cleanStr(recruiter.recruiterTitle),
+            'HR活跃度': cleanStr(recruiter.imShowText),
+            'HR所属公司': cleanStr(recruiter.companyName || comp.compName),
+            '公司名称': cleanStr(comp.compName), 
+            '公司全称': cleanStr(comp.compName), 
+            '公司行业': cleanStr(comp.compIndustry),
+            '公司规模': cleanStr(comp.compScale),
+            '融资阶段': cleanStr(comp.compStage),
+            '公司福利': '', 
+            '详细完整地址': '',
+            '发布时间': cleanStr(job.publishTime || job.pubTime),
+            '页面更新时间': cleanStr(job.updateTime || job.refreshTime),
+            '职位链接': cleanStr(job.link ? job.link.split('?')[0] : '')
+        };
+
+        // 模拟人类向下滚动浏览的行为 (平滑滚动到当前职位的卡片)
+        try {
+            let targetCard = null;
+            const jobLinks = Array.from(document.querySelectorAll('a'));
+            const currentJobLink = jobLinks.find(a => a.href && a.href.includes(String(job.jobId)));
+            if (currentJobLink) {
+                targetCard = currentJobLink.closest('.job-list-item, [class*="job-card"]') || currentJobLink;
+            } else {
+                const allSpanElements = Array.from(document.querySelectorAll('div[title], span[title]'));
+                const nameEl = allSpanElements.find(el => el.title && el.title.trim() === job.title);
+                if (nameEl) {
+                    targetCard = nameEl.closest('.job-list-item, [class*="job-card"]') || nameEl;
+                }
+            }
+
+            if (targetCard) {
+                targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                
+                const originalBoxShadow = targetCard.style.boxShadow;
+                const originalBorder = targetCard.style.border;
+                const originalTransition = targetCard.style.transition;
+                const originalTransform = targetCard.style.transform;
+                
+                targetCard.style.transition = 'all 0.3s ease';
+                targetCard.style.boxShadow = '0 0 20px rgba(255, 165, 0, 0.8)'; // 猎聘用橙色发光
+                targetCard.style.border = '2px solid #ffa500';
+                targetCard.style.transform = 'scale(1.02)';
+                
+                setTimeout(() => { 
+                    targetCard.style.boxShadow = originalBoxShadow; 
+                    targetCard.style.border = originalBorder;
+                    targetCard.style.transform = originalTransform;
+                    setTimeout(() => { targetCard.style.transition = originalTransition; }, 300);
+                }, 3000);
+            } else {
+                const step = Math.floor((document.documentElement.scrollHeight || document.body.scrollHeight) / currentList.length);
+                window.scrollBy({ top: step || 200, behavior: 'smooth' });
+            }
+        } catch (e) {}
+
+        // 创建 iframe 进行深层提取
+        if (activeIframe) { activeIframe.remove(); }
+        activeIframe = document.createElement('iframe');
+        activeIframe.style.cssText = 'position: fixed; right: 20px; bottom: 20px; width: 600px; height: 500px; z-index: 99999999; border: 3px solid #ff9800; background: white; box-shadow: 0 0 15px rgba(0,0,0,0.3); border-radius: 8px;';
+        
+        // 组装详情页链接
+        const detailUrl = job.link ? job.link.split('?')[0] : `https://www.liepin.com/job/${job.jobId}.shtml`;
+        activeIframe.src = detailUrl;
+        
+        window.__CURRENT_PROCESSING_ROW__ = row;
+        document.body.appendChild(activeIframe);
+
+        // 设置 iframe 超时 (重要改动：超时直接停止！)
+        window.__CURRENT_IFRAME_TIMEOUT__ = setTimeout(() => {
+            console.warn(`[超时报警] 职位 ${job.jobId} 提取失败，可能触发反爬或页面渲染失败。`);
+            notifyPopupStatus('反爬异常，已自动暂停');
+            isRunning = false;
+            if (activeIframe) {
+                activeIframe.remove();
+                activeIframe = null;
+            }
+        }, 15000); // 15秒超时
+    }
+
+    function handleDetailData(jobId, descriptionText) {
+        if (window.__CURRENT_IFRAME_TIMEOUT__) {
+            clearTimeout(window.__CURRENT_IFRAME_TIMEOUT__);
+            window.__CURRENT_IFRAME_TIMEOUT__ = null;
+        }
+        
+        const row = window.__CURRENT_PROCESSING_ROW__ || {};
+        
+        row['职位描述'] = cleanMultiLineStr(descriptionText);
+
+        upsertData(row['职位ID'], row, () => {
+            console.log(`✅ [猎聘已抓取] ${row['职位名称']} (含深层描述)`);
+            scheduleNextJob();
+        });
+    }
+
+    function handleDetailDataError(jobId) {
+        if (window.__CURRENT_IFRAME_TIMEOUT__) {
+            clearTimeout(window.__CURRENT_IFRAME_TIMEOUT__);
+            window.__CURRENT_IFRAME_TIMEOUT__ = null;
+        }
+        console.warn(`[DOM提取失败] 职位 ${jobId} 超时没找到描述节点。`);
+        notifyPopupStatus('提取失败，已自动暂停');
+        isRunning = false;
+        if (activeIframe) {
+            activeIframe.remove();
+            activeIframe = null;
+        }
+    }
+
+    function scheduleNextJob() {
+        if (!isRunning) return;
+        currentIndex++;
+        jobsScrapedSinceRest++;
+
+        if (currentIndex >= currentList.length) {
+            if (activeIframe) { activeIframe.remove(); activeIframe = null; }
+            if (isAutoPage) goToNextPage();
+            else { alert('🎉 本页所有职位抓取完毕！'); isRunning = false; notifyPopupStatus('完毕'); }
+            return;
+        }
+
+        let delay = getRandomInt(1000, 2000);
+        // 模拟人类休息
+        if (jobsScrapedSinceRest >= 10 && Math.random() < 0.3) {
+            delay += getRandomInt(3000, 5000);
+            jobsScrapedSinceRest = 0;
+            notifyPopupStatus(`防风控休眠 (${(delay/1000).toFixed(1)}s)`);
+        } else {
+            notifyPopupStatus(`模拟阅读 (${(delay/1000).toFixed(1)}s)`);
+        }
+
+        setTimeout(processNext, delay);
+    }
+
+    function goToNextPage() {
+        if (location.host === 'c.liepin.com') {
+            notifyPopupStatus('向下滚动加载更多...');
+            // 瀑布流：滚动到底部加载更多
+            window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+            
+            // 等待数据加载
+            setTimeout(() => {
+                const checkData = setInterval(() => {
+                    const newList = window.__LIEPIN_LIST_DATA__ || [];
+                    const unProcessed = newList.filter(j => !sessionProcessedIds.has(j.job?.jobId));
+                    if (unProcessed.length > 0) {
+                        clearInterval(checkData);
+                        currentList = unProcessed;
+                        currentIndex = 0;
+                        processNext();
+                    }
+                }, 1000);
+                
+                // 15秒都没刷出新数据就算了
+                setTimeout(() => { clearInterval(checkData); if(isRunning){ notifyPopupStatus('翻页/加载超时'); isRunning = false; } }, 15000);
+            }, 3000);
+
+        } else {
+            // 传统翻页
+            const nextBtn = document.querySelector('li[title="下一页"]') || document.querySelector('.ant-pagination-next');
+            if (nextBtn && !nextBtn.className.includes('ant-pagination-disabled') && nextBtn.querySelector('button') && !nextBtn.querySelector('button').disabled) {
+                notifyPopupStatus('正在翻页...');
+                
+                // 点击下一步
+                const clickEl = nextBtn.querySelector('a') || nextBtn.querySelector('button') || nextBtn;
+                clickEl.click();
+
+                // 等待数据加载
+                setTimeout(() => {
+                    const checkData = setInterval(() => {
+                        const newList = window.__LIEPIN_LIST_DATA__ || [];
+                        if (newList.length > 0 && String(newList[0].job?.jobId) !== String(currentList[0]?.job?.jobId)) {
+                            clearInterval(checkData);
+                            currentList = newList.filter(j => !sessionProcessedIds.has(j.job?.jobId));
+                            currentIndex = 0;
+                            if (currentList.length > 0) {
+                                processNext();
+                            } else {
+                                notifyPopupStatus('新页已抓取过，停止');
+                                isRunning = false;
+                            }
+                        }
+                    }, 1000);
+                    
+                    // 15秒都没刷出新数据就算了
+                    setTimeout(() => { clearInterval(checkData); if(isRunning){ notifyPopupStatus('翻页超时'); isRunning = false; } }, 15000);
+                }, 3000);
+            } else {
+                alert('🎉 所有可用页面均已抓取完毕，或已到达最后一页！');
+                isRunning = false;
+                notifyPopupStatus('全部完毕');
+            }
+        }
+    }
+
+})();

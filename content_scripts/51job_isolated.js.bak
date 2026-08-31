@@ -1,0 +1,417 @@
+(function() {
+    'use strict';
+
+    // ==========================================
+    // 51job ISOLATED WORLD LOGIC
+    // ==========================================
+
+    let isRunning = false;
+    let isAutoPage = true;
+    let currentList = [];
+    let currentIndex = 0;
+    let scrapedData = [];
+    let scrapedIds = new Set();
+    let sessionProcessedIds = new Set();
+    let activeIframe = null;
+    let jobsScrapedSinceRest = 0;
+    let nextRestLimit = getRandomInt(8, 12);
+
+    function getRandomInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+
+    function cleanStr(str) {
+        if (str == null) return '';
+        if (Array.isArray(str)) str = str.join(' / ');
+        return String(str).replace(/[\r\n]+/g, ' ').replace(/"/g, '""').trim();
+    }
+
+    function cleanMultiLineStr(str) {
+        if (str == null) return '';
+        if (Array.isArray(str)) str = str.join('\n');
+        return String(str).replace(/"/g, '""').trim();
+    }
+
+    function loadCache(callback) {
+        chrome.storage.local.get(['51job_scraped_v2'], (res) => {
+            scrapedData = Array.isArray(res['51job_scraped_v2']) ? res['51job_scraped_v2'] : [];
+            scrapedIds = new Set(scrapedData.map(d => d['职位ID']).filter(Boolean));
+            if (callback) callback();
+        });
+    }
+
+    function saveCache(callback) {
+        chrome.storage.local.set({ '51job_scraped_v2': scrapedData }, () => {
+            notifyPopupCount();
+            if (callback) callback();
+        });
+    }
+
+    function notifyPopupStatus(statusText) {
+        chrome.runtime.sendMessage({
+            action: '51job_update_status',
+            isRunning,
+            status: statusText
+        });
+    }
+
+    function notifyPopupCount() {
+        chrome.runtime.sendMessage({
+            action: '51job_update_count',
+            count: scrapedData.length
+        });
+    }
+
+    function upsertData(jobId, row, callback) {
+        const today = new Date();
+        const yyyy = today.getFullYear();
+        const mm = String(today.getMonth() + 1).padStart(2, '0');
+        const dd = String(today.getDate()).padStart(2, '0');
+        const todayStr = `${yyyy}-${mm}-${dd}`;
+
+        const existingIndex = scrapedData.findIndex(d => d['职位ID'] === jobId);
+        if (existingIndex >= 0) {
+            const oldRow = scrapedData[existingIndex];
+            // 保留详情
+            row['详细完整地址'] = row['详细完整地址'] || oldRow['详细完整地址'];
+            row['职位描述'] = row['职位描述'] || oldRow['职位描述'];
+            row['HR姓名'] = row['HR姓名'] || oldRow['HR姓名'];
+            row['公司全称'] = row['公司全称'] || oldRow['公司全称'];
+            
+            row['创建时间'] = oldRow['创建时间'] || todayStr;
+            row['更新时间'] = todayStr;
+            scrapedData[existingIndex] = row;
+        } else {
+            row['创建时间'] = todayStr;
+            row['更新时间'] = todayStr;
+            scrapedData.push(row);
+        }
+        scrapedIds.add(jobId);
+        saveCache(callback);
+    }
+
+    // 监听 Popup 消息
+    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+        if (request.action === '51job_start') {
+            isAutoPage = request.autoScroll;
+            sessionProcessedIds.clear();
+            if (!isRunning) {
+                loadCache(() => {
+                    startScraping();
+                });
+            }
+        } else if (request.action === '51job_stop') {
+            isRunning = false;
+            if (activeIframe) {
+                activeIframe.remove();
+                activeIframe = null;
+            }
+            if (window.__CURRENT_IFRAME_TIMEOUT__) {
+                clearTimeout(window.__CURRENT_IFRAME_TIMEOUT__);
+                window.__CURRENT_IFRAME_TIMEOUT__ = null;
+            }
+            notifyPopupStatus('已暂停');
+        } else if (request.action === '51job_clear') {
+            scrapedData = [];
+            scrapedIds.clear();
+            sessionProcessedIds.clear();
+            saveCache();
+        } else if (request.action === '51job_get_status') {
+            sendResponse({ isRunning, status: isRunning ? '正在运行...' : '闲置' });
+        }
+    });
+
+    // 监听 MAIN World 拦截到的 API 数据
+    window.addEventListener('message', (event) => {
+        if (event.data && event.data.type === '51JOB_LIST_DATA') {
+            window.__51JOB_LIST_DATA__ = event.data.data;
+            console.log("📥 [隔离层] 接收到 51job 列表数据:", event.data.data.length, "条");
+        } else if (event.data && event.data.type === '51JOB_DETAIL_DATA') {
+            handleDetailData(event.data.jobId, event.data.data);
+        }
+    });
+
+    // ==========================================
+    // 列表页 (Master) 逻辑
+    // ==========================================
+    function startScraping() {
+        if (!window.__51JOB_LIST_DATA__ || window.__51JOB_LIST_DATA__.length === 0) {
+            notifyPopupStatus('未抓取到数据');
+            isRunning = false;
+            alert('未能截获 51job 数据包！\\n\\n请在网页底部点击【下一页】，或者尝试重新搜索，触发数据加载后再点击开始抓取。');
+            return;
+        }
+
+        currentList = window.__51JOB_LIST_DATA__.filter(j => !sessionProcessedIds.has(j.jobId));
+        currentIndex = 0;
+        isRunning = true;
+
+        if (currentList.length === 0) {
+            if (isAutoPage) goToNextPage();
+            else { alert('当前可见职位已抓取完毕！'); isRunning = false; notifyPopupStatus('完毕'); }
+            return;
+        }
+
+        processNext();
+    }
+
+    function processNext() {
+        if (!isRunning) return;
+
+        if (currentIndex >= currentList.length) {
+            if (activeIframe) { activeIframe.remove(); activeIframe = null; }
+            if (isAutoPage) goToNextPage();
+            else { alert('🎉 本页所有职位抓取完毕！'); isRunning = false; notifyPopupStatus('完毕'); }
+            return;
+        }
+
+        const job = currentList[currentIndex];
+        sessionProcessedIds.add(job.jobId);
+        notifyPopupStatus(`抓取第 ${currentIndex + 1}/${currentList.length}`);
+
+        // 统一 Boss 字段格式进行浅层抓取保存
+        const row = {
+            '平台': '51job',
+            '职位ID': cleanStr(job.jobId),
+            '职位名称': cleanStr(job.jobName),
+            '工作地点': cleanStr(job.jobAreaString),
+            '详细地址': cleanStr(job.jobAreaString),
+            '薪资待遇': cleanStr(job.provideSalaryString),
+            '工作经验': cleanStr(job.workYearString),
+            '学历要求': cleanStr(job.degreeString),
+            '职位描述': '', // 需要深层抓取
+            '技能标签': job.jobTags ? job.jobTags.join(',') : '',
+            'HR_ID': cleanStr(job.hrUid),
+            'HR姓名': cleanStr(job.hrName),
+            'HR职位': cleanStr(job.hrPosition),
+            'HR活跃度': (() => {
+                let act = cleanStr(job.hrActiveStatus || job.todayActive);
+                if (act.includes('刚刚活跃') || act.includes('今日活跃')) {
+                    const t = new Date();
+                    act = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+                }
+                return act;
+            })(),
+            '公司名称': cleanStr(job.companyName), // 列表页只能拿到展示名
+            '公司全称': cleanStr(job.companyName), 
+            '公司行业': cleanStr(job.companyIndustryType1Str || job.coIndustryText),
+            '公司规模': cleanStr(job.companySizeString),
+            '融资阶段': cleanStr(job.companyTypeString), // 51job是公司类型，对应到融资阶段字段展示
+            '公司福利': job.companyTags ? job.companyTags.join(',') : '',
+            '详细完整地址': '',
+            '页面更新时间': cleanStr(job.updateDateTime || job.issueDateString),
+            '发布时间': cleanStr(job.issueDateString),
+            '更新时间 (51job)': cleanStr(job.updateDateTime),
+            '确认时间': cleanStr(job.confirmDateString)
+        };
+
+        // 模拟人类向下滚动浏览的行为 (平滑滚动到当前职位的卡片)
+        try {
+            let targetCard = null;
+            
+            // 1. 最高优先级：通过埋点数据的 jobId 精准匹配 (最准确)
+            const exposureEls = Array.from(document.querySelectorAll('.sensors_exposure[sensorsdata]'));
+            const exactEl = exposureEls.find(el => {
+                try {
+                    const data = JSON.parse(el.getAttribute('sensorsdata') || '{}');
+                    return String(data.jobId) === String(job.jobId);
+                } catch (e) { return false; }
+            });
+            
+            if (exactEl) {
+                targetCard = exactEl.closest('.joblist-item') || exactEl;
+            } else {
+                // 2. 退化方案：找包含对应 jobId 的 a 标签及其父级卡片
+                const jobLinks = Array.from(document.querySelectorAll('a'));
+                const currentJobLink = jobLinks.find(a => a.href && a.href.includes(String(job.jobId)));
+                if (currentJobLink) {
+                    targetCard = currentJobLink.closest('.joblist-item, [class*="joblist-item"], .e') || currentJobLink;
+                } else {
+                    // 3. 再退化：找包含对应职位名称的元素
+                    const allSpanElements = Array.from(document.querySelectorAll('span.jname, p, div[class*="name"]'));
+                    const nameEl = allSpanElements.find(el => el.innerText && el.innerText.trim() === job.jobName);
+                    if (nameEl) {
+                        targetCard = nameEl.closest('.joblist-item, [class*="joblist-item"], .e') || nameEl;
+                    }
+                }
+            }
+
+            if (targetCard) {
+                targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                
+                // 添加高亮视觉效果，使用边框和阴影代替背景色，防止被子元素覆盖
+                const originalBoxShadow = targetCard.style.boxShadow;
+                const originalBorder = targetCard.style.border;
+                const originalTransition = targetCard.style.transition;
+                const originalTransform = targetCard.style.transform;
+                
+                targetCard.style.transition = 'all 0.3s ease';
+                targetCard.style.boxShadow = '0 0 20px rgba(255, 71, 87, 0.8)'; // 醒目的红色阴影
+                targetCard.style.border = '2px solid #ff4757'; // 红色边框
+                targetCard.style.transform = 'scale(1.02)'; // 稍微放大一点点
+                
+                setTimeout(() => { 
+                    targetCard.style.boxShadow = originalBoxShadow; 
+                    targetCard.style.border = originalBorder;
+                    targetCard.style.transform = originalTransform;
+                    setTimeout(() => { targetCard.style.transition = originalTransition; }, 300);
+                }, 3000);
+            } else {
+                // 如果都没找到具体的卡片，按比例平滑向下滚动页面
+                const step = Math.floor((document.documentElement.scrollHeight || document.body.scrollHeight) / currentList.length);
+                window.scrollBy({ top: step || 200, behavior: 'smooth' });
+            }
+        } catch (e) {}
+
+        // 创建 iframe 进行深层提取
+        if (activeIframe) { activeIframe.remove(); }
+        activeIframe = document.createElement('iframe');
+        activeIframe.style.cssText = 'position: fixed; right: 20px; bottom: 20px; width: 400px; height: 300px; z-index: 99999; border: 2px solid #ff4757; background: white; box-shadow: 0 0 15px rgba(0,0,0,0.3); border-radius: 8px;';
+        activeIframe.src = `https://jobs.51job.com/all/${job.jobId}.html`;
+        
+        // 我们将当前基础 row 存在全局，等 iframe 发回消息时融合
+        window.__CURRENT_PROCESSING_ROW__ = row;
+        
+        document.body.appendChild(activeIframe);
+
+        // 设置 iframe 超时
+        window.__CURRENT_IFRAME_TIMEOUT__ = setTimeout(() => {
+            console.warn(`[超时] 职位 ${job.jobId} 详情加载超时，仅保存列表数据`);
+            upsertData(job.jobId, row, () => {
+                scheduleNextJob();
+            });
+        }, 12000);
+    }
+
+    function handleDetailData(jobId, detailData) {
+        if (window.__CURRENT_IFRAME_TIMEOUT__) {
+            clearTimeout(window.__CURRENT_IFRAME_TIMEOUT__);
+        }
+        
+        const row = window.__CURRENT_PROCESSING_ROW__ || {};
+        if (String(row['职位ID']) !== String(jobId)) return; // Mismatch
+
+        const d = detailData.detailJobInfo || {};
+        const hr = detailData.jobHrInfo || detailData.hrInfo || {};
+
+        row['职位描述'] = cleanMultiLineStr(d.jobDescribe);
+        row['详细完整地址'] = cleanStr(d.companyAddress || d.address);
+        row['公司全称'] = cleanStr(d.companyName || d.coName);
+        row['HR姓名'] = cleanStr(hr.hrName);
+        row['HR_ID'] = cleanStr(hr.hrUid);
+        row['HR职位'] = cleanStr(hr.hrPosition);
+        
+        let hrActive = cleanStr(hr.activeStatus || hr.todayActive);
+        if (hrActive.includes('刚刚活跃') || hrActive.includes('今日活跃')) {
+            const today = new Date();
+            const yyyy = today.getFullYear();
+            const mm = String(today.getMonth() + 1).padStart(2, '0');
+            const dd = String(today.getDate()).padStart(2, '0');
+            hrActive = `${yyyy}-${mm}-${dd}`;
+        }
+        row['HR活跃度'] = hrActive;
+        if (d.jobKeywordList) {
+            row['技能标签'] = d.jobKeywordList.map(k => k.wordText).join(',');
+        }
+        row['公司福利'] = cleanStr(d.welfare);
+        row['页面更新时间'] = cleanStr(d.issueDate);
+        row['发布时间'] = cleanStr(d.issueDate || row['发布时间']);
+        row['详细地址'] = cleanStr(d.address);
+
+        upsertData(jobId, row, () => {
+            console.log(`✅ [51job已抓取] ${row['职位名称']} (含深层数据)`);
+            scheduleNextJob();
+        });
+    }
+
+    function scheduleNextJob() {
+        if (!isRunning) return;
+        currentIndex++;
+        jobsScrapedSinceRest++;
+
+        if (currentIndex >= currentList.length) {
+            if (activeIframe) { activeIframe.remove(); activeIframe = null; }
+            if (isAutoPage) goToNextPage();
+            else { alert('🎉 本页所有职位抓取完毕！'); isRunning = false; notifyPopupStatus('完毕'); }
+            return;
+        }
+
+        if (jobsScrapedSinceRest >= nextRestLimit) {
+            const restSec = getRandomInt(25, 45); // 51job 风控稍弱，休息时间可以短一点
+            jobsScrapedSinceRest = 0;
+            nextRestLimit = getRandomInt(8, 12);
+            let c = restSec;
+            notifyPopupStatus(`防风控休眠 (${c}s)`);
+            const t = setInterval(() => {
+                c--;
+                if (isRunning) notifyPopupStatus(`防风控休眠 (${c}s)`);
+                if (c <= 0 || !isRunning) {
+                    clearInterval(t);
+                    if (isRunning) {
+                        const delay = getRandomInt(3000, 7000);
+                        notifyPopupStatus(`即将继续 (${(delay/1000).toFixed(1)}s)`);
+                        setTimeout(processNext, delay);
+                    }
+                }
+            }, 1000);
+        } else {
+            const delay = getRandomInt(3000, 7000);
+            notifyPopupStatus(`人类模拟 (${(delay/1000).toFixed(1)}s)`);
+            setTimeout(processNext, delay);
+        }
+    }
+
+    function goToNextPage() {
+        const nextBtn = document.querySelector('.btn-next') || document.querySelector('button.btn-next') || document.querySelector('li.btn-next');
+        if (nextBtn && !nextBtn.disabled && !nextBtn.classList.contains('disabled')) {
+            notifyPopupStatus('自动翻页中...');
+            window.__51JOB_LIST_DATA__ = []; // 翻页前清空，等待拦截器再次赋值
+            nextBtn.click();
+            
+            // 轮询等待新数据
+            let attempts = 0;
+            const poll = setInterval(() => {
+                attempts++;
+                if (window.__51JOB_LIST_DATA__ && window.__51JOB_LIST_DATA__.length > 0) {
+                    clearInterval(poll);
+                    const wait = getRandomInt(2000, 4000);
+                    notifyPopupStatus(`等待新列表 (${(wait/1000).toFixed(1)}s)`);
+                    setTimeout(() => { if (isRunning) startScraping(); }, wait);
+                } else if (attempts >= 30) { // 等待 15s
+                    clearInterval(poll);
+                    alert(`🎉 抓取结束！等待下一页数据超时，共缓存 ${scrapedData.length} 条数据。`);
+                    isRunning = false;
+                    notifyPopupStatus('完毕');
+                }
+            }, 500);
+        } else {
+            alert(`🎉 抓取完毕！已到达最后一页，共缓存 ${scrapedData.length} 条数据。`);
+            isRunning = false;
+            notifyPopupStatus('完毕');
+        }
+    }
+
+    // ==========================================
+    // 详情页 (Worker/Iframe) 逻辑
+    // ==========================================
+    if (window !== window.parent && window.location.href.includes('jobs.51job.com')) {
+        // 在详情页 iframe 内，模拟人类随机滚动行为
+        let scrollCount = 0;
+        const maxScrolls = Math.floor(Math.random() * 2) + 1; 
+        
+        const scrollInterval = setInterval(() => {
+            scrollCount++;
+            
+            if (scrollCount >= maxScrolls) {
+                const detailBox = document.querySelector('.job_msg, .bmsg.job_msg');
+                if (detailBox) {
+                    detailBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                } else {
+                    window.scrollBy({ top: 300, behavior: 'smooth' });
+                }
+                clearInterval(scrollInterval);
+            } else {
+                const step = Math.floor(Math.random() * 200) + 100;
+                window.scrollBy({ top: step, behavior: 'smooth' });
+            }
+        }, Math.floor(Math.random() * 800) + 1000);
+    }
+})();

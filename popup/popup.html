@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>招聘数据采集</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <div class="header">
+        <h2>🕵️ 招聘数据提取大师</h2>
+        <p class="subtitle">统一管理 Boss、猎聘、51job、智联数据</p>
+        <button id="btn-open-dashboard" class="btn btn-primary" style="margin-top: 12px; width: 100%;">🖥️ 打开数据管理面板</button>
+    </div>
+
+    <div class="platform-section" id="section-unified">
+        <div class="platform-header">
+            <h3 id="unified-title">当前平台: 检测中...</h3>
+        </div>
+        <div style="margin-bottom: 10px;">
+            <span class="status idle" id="unified-status">状态: 闲置</span>
+        </div>
+        <div class="stats">
+            已缓存数据: <span class="count" id="unified-count">0</span> 条
+        </div>
+        <div class="actions">
+            <button class="btn btn-primary" id="btn-start-unified">▶ 列表抓取</button>
+            <button class="btn btn-warn" id="btn-stop-unified">⏸ 暂停</button>
+        </div>
+        <div class="settings" style="margin-top: 8px;">
+            <label><input type="checkbox" id="unified-auto-scroll" checked> 自动往下翻页/下拉加载</label>
+            <div style="margin-top: 4px;">
+                <label><input type="checkbox" id="unified-skip-scraped" checked> 跳过已抓取的职位</label>
+            </div>
+            <div id="open-mode-container" style="margin-top: 8px; font-size: 13px; color: #555;">
+                <label id="open-mode-label" for="unified-open-mode">51job / 猎聘详情打开方式：</label>
+                <select id="unified-open-mode" style="padding: 2px 4px; border-radius: 4px; border: 1px solid #ccc; font-size: 12px;">
+                    <option value="iframe">内嵌 Iframe (默认)</option>
+                    <option value="new_tab">后台新标签页</option>
+                </select>
+            </div>
+        </div>
+
+        <div id="chat-scan-section" style="display: none; margin-top: 10px; padding: 10px; background: #fee2e2; border-radius: 8px; border: 1px solid #fca5a5;">
+            <div style="font-size: 13px; font-weight: 600; color: #991b1b; margin-bottom: 4px;">💬 检测到沟通聊天页面</div>
+            <div style="font-size: 12px; color: #b91c1c; margin-bottom: 8px;">可一键反向识别并提取婉拒企业加入黑名单</div>
+            <button class="btn" id="btn-scan-chat-blacklist" style="background: #ef4444; color: #fff; width: 100%; border: none; font-size: 13px; padding: 6px 0; border-radius: 6px; cursor: pointer; font-weight: 600;">🚫 扫描当前会话并提取拉黑</button>
+        </div>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>
