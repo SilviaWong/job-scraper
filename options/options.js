@@ -1873,7 +1873,7 @@ document.addEventListener('DOMContentLoaded', () => {
         '51job_companies_scraped', '51job_scraped_v2', '51job_single_details',
         'ai_job_scores', 'ai_job_intros', 'ai_settings',
         'blacklisted_companies',
-        'boss_companies_scraped', 'boss_scraped_v2', 'boss_single_details',
+        'boss_companies_scraped', 'boss_company_details', 'boss_scraped_v2', 'boss_single_details',
         'favorited_jobs', 'interview_questions', 'job_interviews', 'job_statuses',
         'liepin_companies_db_v1', 'liepin_company_details', 'liepin_scraped_data_v1', 'liepin_single_details',
         'user_job_tags',

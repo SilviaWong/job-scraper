@@ -22,12 +22,15 @@
     // 列表页 (Master) 逻辑
     // ==========================================
     const isMaster = window.self === window.top && window.location.href.includes('we.51job.com');
-    const isDetail = window.location.href.includes('jobs.51job.com');
+    // 精确判定：职位详情页 URL 必须是 jobs.51job.com，且必须以纯数字ID.html结尾（如 /shanghai-mhq/76704463.html）
+    // 排除公司主页（如 /all/coAWRUN146BT4CYAdmUTE.html）
+    const isCompanyPage = /\/co[a-zA-Z0-9_-]+\.html/i.test(window.location.href) || /\/all\/co/i.test(window.location.href);
+    const isJobDetail = window.location.href.includes('jobs.51job.com') && /\/\d+\.html/i.test(window.location.href) && !isCompanyPage;
 
     // ==========================================
     // 详情页 (Detail) 独立单页抓取与新标签页拦截逻辑
     // ==========================================
-    if (isDetail && !isMaster) {
+    if (isJobDetail && !isMaster) {
         let interceptedDetailData = null;
         let interceptedCompanyData = null;
         let hasScrapedThisPage = false;
@@ -42,11 +45,14 @@
                 border-radius: 8px; z-index: 9999999; font-size: 15px; font-weight: bold; pointer-events: none;
                 box-shadow: 0 4px 12px rgba(0,0,0,0.25); transition: opacity 0.5s;
             `;
-            document.body.appendChild(div);
-            setTimeout(() => {
-                div.style.opacity = '0';
-                setTimeout(() => div.remove(), 500);
-            }, 3000);
+            const container = document.body || document.documentElement;
+            if (container) {
+                container.appendChild(div);
+                setTimeout(() => {
+                    div.style.opacity = '0';
+                    setTimeout(() => div.remove(), 500);
+                }, 3000);
+            }
         }
 
         // 轮询检查页面是否有“暂停招聘”或“安全验证”
@@ -103,8 +109,9 @@
                     return;
                 }
 
-                // 尝试执行独立保存
-                scrapeSinglePage(true);
+                // 尝试执行独立保存（仅自动化后台标签页或iframe中静默，前台用户主动打开时正常弹窗提示）
+                const isAutoTab = window.location.href.includes('auto_close=1') || (window.self !== window.top);
+                scrapeSinglePage(isAutoTab);
 
                 if (window.location.href.includes('auto_close=1')) {
                     console.log(`[51job Detail] 后台标签页已提取数据，5秒后自动关闭...`);
@@ -118,7 +125,8 @@
                 chrome.runtime.sendMessage({ action: '51JOB_DATA_EXTRACTED', data: event.data }).catch(() => {});
                 // 公司信息到达后，若已抓取过则更新公司库
                 if (hasScrapedThisPage) {
-                    scrapeSinglePage(true);
+                    const isAutoTab = window.location.href.includes('auto_close=1') || (window.self !== window.top);
+                    scrapeSinglePage(isAutoTab);
                 }
             } else if (event.data.type === '51JOB_API_CACHE_RETURNED') {
                 if (event.data.detailData) interceptedDetailData = event.data.detailData;
@@ -140,9 +148,14 @@
         // === 独立职位详情提取函数 (API拦截优先 + DOM兜底 双保险) ===
         function scrapeSinglePage(isSilent = false) {
             try {
-                const urlMatch = window.location.href.match(/\/(\d+)\.html/) || window.location.href.match(/\/([^.?#]+)\.html/);
+                const urlMatch = window.location.href.match(/\/(\d+)\.html/);
                 const jobId = (interceptedDetailData && interceptedDetailData.detailJobInfo && interceptedDetailData.detailJobInfo.jobId)
-                    || (urlMatch ? urlMatch[1] : `51job_${Date.now()}`);
+                    || (urlMatch ? urlMatch[1] : null);
+
+                if (!jobId) {
+                    console.log('[51job Detail] 当前页面未能解析到纯数字 jobId，跳过抓取');
+                    return;
+                }
 
                 const d = (interceptedDetailData && interceptedDetailData.detailJobInfo) || {};
                 const hr = (interceptedDetailData && interceptedDetailData.jobHrInfo) || {};
@@ -272,16 +285,22 @@
                         }
                     }
 
-                    chrome.storage.local.set({
-                        '51job_single_details': list,
-                        '51job_companies_scraped': compList
-                    }, () => {
-                        hasScrapedThisPage = true;
-                        if (!isSilent) {
-                            showToast('✅ 51job职位详情已自动抓取，关键数据已同步至主库！');
-                        }
-                        console.log(`[51job Detail] 职位详情已保存到 51job_single_details: ${row['职位名称']} (${jobId})`);
-                    });
+                    // 暂时不保存到扩展程序本地缓存中
+                    // chrome.storage.local.set({
+                    //     '51job_single_details': list,
+                    //     '51job_companies_scraped': compList
+                    // }, () => {
+                    //     console.log(`[51job Detail] 职位详情已保存到 51job_single_details: ${row['职位名称']} (${jobId})`);
+                    // });
+
+                    const wasAlreadyScraped = hasScrapedThisPage;
+                    hasScrapedThisPage = true;
+                    if (!isSilent && !wasAlreadyScraped) {
+                        showToast('✅ 51job职位详情已自动抓取，关键数据已同步至主库！');
+                    } else if (isSilent === false && wasAlreadyScraped) {
+                        showToast('✅ 51job职位详情已重新抓取，关键数据已同步至主库！');
+                    }
+                    console.log(`[51job Detail] 职位详情已成功抓取: ${row['职位名称']} (${jobId})`);
 
                     // 尝试推送职位详情到本地服务器
                     fetch('http://localhost:3000/api/job-details', {

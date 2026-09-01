@@ -32,31 +32,69 @@
   - **AI 简历匹配诊断**：配置 OpenAI 兼容接口（如 DeepSeek 等）及个人简历后，一键对目标岗位进行深度的匹配度打分与优劣势分析。
   - **智能招呼语生成**：根据岗位 JD 和你的简历，AI 自动撰写高转化率的个性化打招呼/自荐文案。
 
-## 🧩 各平台抓取实现逻辑
+## 🧩 各平台抓取与数据提取机制
 
-### 1. Boss 直聘 (Boss Zhipin)
-- **触发页面**：`www.zhipin.com/web/geek/job`
-- **JSON 拦截**：在 `boss_interceptor.js` 中通过重写 `XMLHttpRequest` 捕获 `/wapi/zpgeek/search/joblist.json` 的响应。直接从接口返回中提取职位名称、薪资、地理位置、基本要求以及 HR 基本信息。
-- **深层 DOM 提取**：在 `boss_isolated.js` 中通过隐藏 iframe 访问 `/job_detail/{jobId}.html`，提取详细的职位描述、技能标签、HR 最新活跃状态（如“刚刚活跃”）及企业工商全称。
-- **难点与反爬**：极易触发 `verify/slider` 滑块验证。抓取策略中加入了针对验证重定向的检测，一旦命中立即停止任务队列，避免账号异常。
+各招聘平台的前端架构差异巨大：有的平台数据完全通过 Ajax/Fetch 请求异步渲染，可直接截获原始 JSON；有的采用服务端直出 (SSR) 将结构化数据挂载在内嵌 `<script>` 状态中；还有的只能通过解析 DOM 节点文本获取。
 
-### 2. 前程无忧 (51job)
-- **触发页面**：`we.51job.com/pc/search` 等搜索页
-- **JSON 拦截**：在 `51job_interceptor.js` 中通过劫持 `window.fetch` 捕获 `/api/job/search-pc` 等相关 API 响应，提取其多维度的扁平化字段。
-- **深层 DOM 提取**：部分列表数据缺少精确的“更新时间”或“公司福利”。在 `51job_isolated.js` 中渲染详情页并补充这些字段。
-- **特色处理**：51job 新老版 URL 体系混杂，扩展在映射中加入了 `城市拼音` 的拼接逻辑以确保详情页的准确定位。
+本扩展采用**“职位列表页主抓保广度，职位详情页与企业主页按需精准补充保深度”**的混合架构。以下为各平台在 3 类页面上的实际数据获取方式对比：
 
-### 3. 猎聘网 (Liepin)
-- **触发页面**：传统翻页 (`www.liepin.com/zhaopin`) 和 瀑布流 (`c.liepin.com`)
-- **JSON 拦截**：`liepin_interceptor.js` 兼容捕获 `pc-search-job` 及瀑布流接口数据。
-- **深层 DOM 提取**：猎聘的列表 API 往往不直接返回详细标签和实际更新时间。`liepin_isolated.js` 通过加载 `/job/{jobId}.shtml` 解析出深层的 `supplementalDomData` 对象（包括 `cambrianPubDate`, `welfareTags` 等）。
-- **难点与反爬**：猎聘首页是滚动触发加载的瀑布流。为此 `isolated` 层内置了轮询滚动机制 (`window.scrollBy`)，强制激活网络请求。同时加入了对 `/safecenter/` 安全验证页面的重定向熔断机制，并在销毁 iframe 时设置 `about:blank` 释放内存。
+### 📊 全平台数据获取方式对照表
 
-### 4. 智联招聘 (Zhilian Zhaopin)
-- **触发页面**：`sou.zhaopin.com`
-- **JSON 拦截**：通过拦截对应的搜索 API 请求获取基础列表，提取薪酬、岗位职责概述及公司规模信息。
-- **深层 DOM 提取**：使用 iframe 进入独立详情页，提取完整的岗位职责与更准确的福利待遇数据。
-- **统一标准化**：智联的部分字段格式与其他三家差异较大，在存储前经过 `zhilian_isolated.js` 格式化为通用的 `职位名称`, `薪资待遇`, `公司全称` 等。
+| 招聘平台 | 1. 职位列表页 (主抓广度) | 2. 职位详情页 (独立点开补充) | 3. 公司主页 (企业全景) |
+| :--- | :--- | :--- | :--- |
+| **Boss 直聘** | ⚡ **纯网络 JSON 拦截**<br>`wapi/zpgeek/search/joblist.json` | 🔍 **纯 DOM 提取** (单页直开时)<br>*(注：自动化列表批跑时拦截侧边详情 API)* | 🔍 **依赖详情页 DOM 工商卡片**<br>*(未设独立公司主页脚本)* |
+| **前程无忧 51job** | ⚡ **纯网络 JSON 拦截**<br>`api/job/search-pc` | 🔀 **双轨混合 (优先 JSON，DOM 兜底)**<br>异步拦截 `job-pcdetail` 与 `company-info` | ⚡ **详情页异步 JSON 顺带提取**<br>拦截 `company-info/pc-info` |
+| **猎聘网 (Liepin)** | ⚡ **纯网络 JSON 拦截**<br>`com.liepin.searchfront4c.pc-search-job` | 🔀 **双轨混合 (内嵌 JSON-LD + DOM 补充)**<br>解析 Schema.org JSON 与工商 DOM | 🔀 **内嵌 $CONFIG + DOM 补充**<br>`liepin_company_isolated.js` |
+| **智联招聘 (Zhilian)** | ⚡ **内嵌 State + 网络 JSON 拦截**<br>首屏 `__INITIAL_STATE__` + 翻页 API | ⚡ **纯结构化 State JSON 提取**<br>直取 `__INITIAL_STATE__.companyExtDetail` | ⚡ **在职位详情页中直接随附提取**<br>无需单独访问公司主页 |
+
+---
+
+### 🔬 各平台具体实现与技术细节
+
+#### 1. Boss 直聘 (`www.zhipin.com`)
+- **职位列表页**：**【纯网络 JSON 拦截】**
+  - **实现脚本**：`content_scripts/boss_interceptor.js`
+  - **机制**：在 `MAIN` 世界劫持 `window.fetch` 与 `XMLHttpRequest`，监听匹配 `wapi/zpgeek/search/joblist.json`，直接截取平台原生的 `zpData.jobList` 纯净 JSON 数据包，无损捕获职位基础信息、薪资范围、城市、经验、学历及企业简况。
+- **职位详情页**：**【DOM 提取（单页打开）+ JSON 拦截（列表批量跑）】**
+  - **实现脚本**：`content_scripts/boss_isolated.js` 中的 `scrapeSinglePage()`
+  - **机制**：
+    - **单页独立打开（用户主场景）**：Boss 详情页采用服务端直出渲染（SSR），新开标签页通常不触发详情 Ajax。扩展通过 `document.querySelector` 提取 `.job-sec-text`（完整岗位职责）以及 `.business-info-box` 下的工商元素（企业全称、法定代表人、成立日期、企业类型、经营状态、注册资金、办公地址等）。
+    - **列表批量执行（自动化模式）**：通过模拟点击列表项拦截异步请求 `wapi/zpgeek/job/detail.json` 获取 `zpData.jobInfo`。
+
+#### 2. 前程无忧 51job (`we.51job.com` / `jobs.51job.com`)
+- **职位列表页**：**【纯网络 JSON 拦截】**
+  - **实现脚本**：`content_scripts/51job_interceptor.js`
+  - **机制**：拦截搜索页接口 `api/job/search-pc`，截获 `resultbody.job.items` 规范的职位对象数组。
+- **职位详情页**：**【双轨混合：优先 JSON 拦截，DOM 兜底】**
+  - **实现脚本**：`content_scripts/51job_interceptor.js` 与 `content_scripts/51job_isolated.js`
+  - **机制**：
+    - **优先 JSON 拦截**：页面打开时，51job 会异步请求 `api/pc/open/noauth/jobs/job-pcdetail/`（职位详情 `detailJobInfo`）与 `api/pc/open/noauth/company-info/pc-info`（包含营业执照 `license`、法定代表人、注册资本等）。拦截器截获后直接组装结构化数据；
+    - **DOM 容灾降级**：若网络卡顿未截获到接口，则退化调用 `document.querySelector('.job_msg')` 等解析 DOM，确保抓取成功率达 100%。
+
+#### 3. 猎聘网 (`www.liepin.com` / `c.liepin.com`)
+- **职位列表页**：**【纯网络 JSON 拦截】**
+  - **实现脚本**：`content_scripts/liepin_search_interceptor.js` 与 `content_scripts/liepin_home_interceptor.js`
+  - **机制**：搜索页拦截 `com.liepin.searchfront4c.pc-search-job` 获取 `jobCardList`；首页瀑布流拦截 `api-batch/parallel` 与 `home-recommend-job-new`。
+- **职位详情页**：**【内嵌 JSON-LD + DOM 混合提取】**
+  - **实现脚本**：`content_scripts/liepin_search_isolated.js`
+  - **机制**：
+    - **内嵌结构化 JSON**：直接从 HTML 中的 `<script type="application/ld+json">` 提取搜索引擎专用的 Schema.org 数据（规范的标题、薪资、发布时间、公司链接）以及从 `<script>window.$CONFIG</script>` 提取 `compId`；
+    - **DOM 补充**：结合 `.job-intro-container`（岗位描述）和 `.business-license-container`（提取法人、注册资金、成立日期等）。
+- **公司主页**：**【内嵌 $CONFIG + DOM 补充】**
+  - **实现脚本**：`content_scripts/liepin_company_isolated.js`
+  - **机制**：从页面内嵌 `$CONFIG` 提取企业编号与全称，从页面 DOM 提取企业全景信息。
+
+#### 4. 智联招聘 (`sou.zhaopin.com` / `zhaopin.com`)
+- **职位列表页**：**【内嵌 State JSON + 网络 JSON 拦截】**
+  - **实现脚本**：`content_scripts/zhilian_new_isolated.js` 与 `content_scripts/zhilian_interceptor.js`
+  - **机制**：首屏直接从 HTML 内嵌的 `<script>window.__INITIAL_STATE__=...</script>` 中反序列化出首屏全部列表（`positionList`），翻页时拦截 `search/positions` 或 `search/joblist` 接口。
+- **职位详情页**：**【纯结构化 State JSON 提取（极少依赖 DOM）】**
+  - **实现脚本**：`content_scripts/zhilian_new_isolated.js`
+  - **机制**：智联详情页在首屏 HTML 的 `__INITIAL_STATE__` 中直接打包包含了：
+    - `state.jobDetail`（岗位职责、任职要求、薪资福利）
+    - `state.companyExtDetail`（企业的统一社会信用代码、营业执照注册信息、经营范围）
+    - `state.jobDeliverList`（同企业推荐在招职位）
+    因此智联的数据最为纯净完备，完全不受页面 DOM 结构变动或防抓混淆的影响。
 
 
 ## 📂 项目结构

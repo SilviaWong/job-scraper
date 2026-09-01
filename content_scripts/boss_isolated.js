@@ -360,6 +360,7 @@
                 }
 
                 const compList = res.boss_companies_scraped || [];
+                let currentCompData = null;
                 if (row['公司ID'] || row['公司全称']) {
                     const cId = row['公司ID'];
                     const cName = row['公司全称'];
@@ -378,8 +379,12 @@
                         '公司行业': row['公司行业'] || '',
                         '公司规模': row['公司规模'] || '',
                         '公司福利': row['公司福利'] || '',
+                        '详细完整地址': row['详细完整地址'] || '',
+                        'sourcePlatform': 'Boss直聘',
+                        'platform': 'boss',
                         '更新时间': new Date().toLocaleString()
                     };
+                    currentCompData = compData;
 
                     if (cIdx >= 0) {
                         compList[cIdx] = { ...compList[cIdx], ...compData };
@@ -416,6 +421,17 @@
                 }).catch(err => {
                     console.log('[Boss Scraper] Local server single detail sync failed:', err);
                 });
+
+                // 同步提取到的企业工商数据到本地企业库
+                if (currentCompData) {
+                    fetch('http://localhost:3000/api/companies', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify([currentCompData])
+                    }).catch(err => {
+                        console.log('[Boss Scraper] Local server company sync failed:', err);
+                    });
+                }
 
                 // 推送职位详情数据 到远程服务 (已注释)
                 // https://job-dashboard-bgr.pages.dev

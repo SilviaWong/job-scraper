@@ -65,6 +65,16 @@
     },
     {
       "matches": [
+        "*://*.zhipin.com/gongsi/*"
+      ],
+      "js": [
+        "content_scripts/boss_company_isolated.js"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "matches": [
         "*://*.51job.com/*"
       ],
       "js": [

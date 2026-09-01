@@ -49,6 +49,13 @@
         }
         // 拦截公司详情 JSON (company-info API)
         else if (url.includes('api/pc/open/noauth/company-info/pc-info') && json && json.resultbody) {
+            // 过滤：如果是在顶层窗口（用户直接浏览页面），且当前处于公司主页（/all/co...html）而非纯数字职位详情页，则直接跳过不拦截
+            const isCompanyPage = /\/co[a-zA-Z0-9_-]+\.html/i.test(window.location.href) || /\/all\/co/i.test(window.location.href);
+            const isJobDetailPage = /\/\d+\.html/i.test(window.location.href);
+            if (window === window.parent && (isCompanyPage || !isJobDetailPage)) {
+                return;
+            }
+
             window.__51JOB_COMPANY_DATA__ = json.resultbody;
             const coId = (json.resultbody.coinfo) ? (json.resultbody.coinfo.coid || json.resultbody.coinfo.ctmId) : null;
             console.log("🌟 [51job Interceptor] 拦截到公司 API:", url, "提取到的 coId:", coId, "仅保留 resultbody:", json.resultbody);

@@ -22,6 +22,8 @@
                             window.postMessage({ type: 'BOSS_JOB_DETAIL', url: urlStr, data: json }, '*');
                         } else if (data.jobList) {
                             window.postMessage({ type: 'BOSS_JOB_LIST', url: urlStr, data: json }, '*');
+                        } else if (data.brandInfo || data.companyInfo || data.brandComInfo) {
+                            window.postMessage({ type: 'BOSS_COMPANY_DETAIL', url: urlStr, data: json }, '*');
                         }
                     }
                 } catch(e) {}
@@ -53,6 +55,8 @@
                         window.postMessage({ type: 'BOSS_JOB_DETAIL', url: this._bossUrl, data: json }, '*');
                     } else if (data.jobList) {
                         window.postMessage({ type: 'BOSS_JOB_LIST', url: this._bossUrl, data: json }, '*');
+                    } else if (data.brandInfo || data.companyInfo || data.brandComInfo) {
+                        window.postMessage({ type: 'BOSS_COMPANY_DETAIL', url: this._bossUrl, data: json }, '*');
                     }
                 }
             } catch(e) {}

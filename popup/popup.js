@@ -65,6 +65,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     let isDetailPage = false;
+    let isCompanyPage = false;
 
     function detectPlatform() {
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -83,7 +84,14 @@ document.addEventListener('DOMContentLoaded', () => {
                                    (key === 'liepin' && (url.includes('/job/') || url.includes('/a/'))) ||
                                    (key === 'zhilian' && url.includes('jobs.zhaopin.com'));
 
-                    unifiedTitle.textContent = `当前平台: ${config.name}${isDetailPage ? ' (职位详情页)' : ''}`;
+                    isCompanyPage = (key === 'boss' && url.includes('/gongsi/')) ||
+                                    (key === 'liepin' && url.includes('/company/'));
+
+                    let pageTypeDesc = '';
+                    if (isDetailPage) pageTypeDesc = ' (职位详情页)';
+                    else if (isCompanyPage) pageTypeDesc = ' (公司主页)';
+
+                    unifiedTitle.textContent = `当前平台: ${config.name}${pageTypeDesc}`;
                     btnStartUnified.disabled = false;
                     btnStopUnified.disabled = false;
                     initPlatform(key, url);
@@ -105,7 +113,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const chatScanSection = document.getElementById('chat-scan-section');
         const btnScanChatBlacklist = document.getElementById('btn-scan-chat-blacklist');
 
-        if (isDetailPage) {
+        if (isCompanyPage) {
+            btnStartUnified.textContent = '🏢 抓取当前公司详情';
+            btnStopUnified.style.display = 'none';
+            if (settingsSection) settingsSection.style.display = 'none';
+            unifiedStatus.textContent = '状态: 公司主页就绪 (已启用自动抓取)';
+        } else if (isDetailPage) {
             btnStartUnified.textContent = '📥 抓取当前职位详情';
             btnStopUnified.style.display = 'none';
             if (settingsSection) settingsSection.style.display = 'none';
@@ -209,6 +222,23 @@ document.addEventListener('DOMContentLoaded', () => {
         btnStartUnified.addEventListener('click', () => {
             if (!currentPlatform || !currentTabId) return;
             
+            if (isCompanyPage) {
+                const compAction = currentPlatform === 'boss' ? 'boss_scrape_company' : 'liepin_company_scrape';
+                unifiedStatus.textContent = '状态: 正在抓取公司详情...';
+                unifiedStatus.className = 'status running';
+                chrome.tabs.sendMessage(currentTabId, { action: compAction }, (res) => {
+                    setTimeout(() => {
+                        unifiedStatus.textContent = '状态: 公司抓取完成';
+                        unifiedStatus.className = 'status idle';
+                    }, 800);
+                }).catch(() => {
+                    alert('无法连接到网页插件，请先刷新网页 (F5) 后再试！');
+                    unifiedStatus.textContent = '状态: 未连接';
+                    unifiedStatus.className = 'status idle';
+                });
+                return;
+            }
+
             if (isDetailPage) {
                 const singleAction = platformConfig[currentPlatform].singleAction;
                 unifiedStatus.textContent = '状态: 正在抓取当前职位...';
