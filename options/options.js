@@ -624,7 +624,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (currentSource === 'kanban-board') {
             kanbanContainer.style.display = 'block';
-            chrome.storage.local.get(['boss_scraped_v2', 'boss_single_details', '51job_scraped_v2', '51job_single_details', 'liepin_scraped_data_v1', 'liepin_single_details', 'zhilian_scraped_data_v1', 'zhilian_scraped_data_v2', 'zhilian_enrichment_cache', 'user_job_tags'], (res) => {
+            chrome.storage.local.get(['boss_scraped_v2', 'boss_single_details', '51job_scraped_v2', '51job_single_details', 'liepin_scraped_data_v1', 'liepin_single_details', 'zhilian_scraped_v2', 'zhilian_single_details', 'zhilian_scraped_data_v1', 'zhilian_scraped_data_v2', 'zhilian_enrichment_cache', 'user_job_tags'], (res) => {
                 window.zhilianEnrichmentCache = res.zhilian_enrichment_cache || {};
                 window.userJobTags = res.user_job_tags || {};
 
@@ -687,12 +687,32 @@ document.addEventListener('DOMContentLoaded', () => {
                     liepinList = [...liepinList, ...standaloneLp];
                 }
 
+                // 兼容智联详情库，将 zhilian_single_details 合并进 zhilian 列表
+                let zhilianList = [...(res['zhilian_scraped_v2'] || []), ...(res['zhilian_scraped_data_v2'] || []), ...(res['zhilian_scraped_data_v1'] || [])];
+                if (res.zhilian_single_details) {
+                    const zlDetailsDict = {};
+                    res.zhilian_single_details.forEach(d => { if (d['职位ID']) zlDetailsDict[d['职位ID']] = d; });
+                    zhilianList.forEach(job => {
+                        const jId = job.jobId || job['职位ID'] || job.number;
+                        const detail = zlDetailsDict[jId];
+                        if (detail) {
+                            for (const key of Object.keys(detail)) {
+                                if (detail[key] && detail[key] !== '' && !job[key]) {
+                                    job[key] = detail[key];
+                                }
+                            }
+                        }
+                    });
+                    const existingZlIds = new Set(zhilianList.map(j => j.jobId || j['职位ID'] || j.number));
+                    const standaloneZl = res.zhilian_single_details.filter(d => d['职位ID'] && !existingZlIds.has(d['职位ID']));
+                    zhilianList = [...zhilianList, ...standaloneZl];
+                }
+
                 const datasets = {
                     boss: res['boss_scraped_v2'] || [],
                     '51job': job51List,
                     liepin: liepinList,
-                    // V2 优先，排在前面，合并去重时以 V2 属性为主
-                    zhilian: [...(res['zhilian_scraped_data_v2'] || []), ...(res['zhilian_scraped_data_v1'] || [])]
+                    zhilian: zhilianList
                 };
                 allData = mergeAndDeduplicate(datasets);
                 renderKanban(allData);
@@ -701,7 +721,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (currentSource === 'merged-data' || currentSource === 'dashboard-data') {
-            chrome.storage.local.get(['boss_scraped_v2', 'boss_single_details', '51job_scraped_v2', '51job_single_details', 'liepin_scraped_data_v1', 'liepin_single_details', 'zhilian_scraped_data_v1', 'zhilian_scraped_data_v2', 'zhilian_enrichment_cache', 'user_job_tags', 'boss_companies_scraped', '51job_companies_scraped', 'liepin_companies_db_v1', 'zhilian_company_cache'], (res) => {
+            chrome.storage.local.get(['boss_scraped_v2', 'boss_single_details', '51job_scraped_v2', '51job_single_details', 'liepin_scraped_data_v1', 'liepin_single_details', 'zhilian_scraped_v2', 'zhilian_single_details', 'zhilian_scraped_data_v1', 'zhilian_scraped_data_v2', 'zhilian_enrichment_cache', 'user_job_tags', 'boss_companies_scraped', '51job_companies_scraped', 'liepin_companies_db_v1', 'zhilian_company_cache'], (res) => {
                 window.zhilianEnrichmentCache = res.zhilian_enrichment_cache || {};
                 window.userJobTags = res.user_job_tags || {};
 
@@ -764,13 +784,34 @@ document.addEventListener('DOMContentLoaded', () => {
                     liepinList = [...liepinList, ...standaloneLp];
                 }
 
+                // 兼容智联详情库，将 zhilian_single_details 合并进 zhilian 列表
+                let zhilianList = [...(res['zhilian_scraped_v2'] || []), ...(res['zhilian_scraped_data_v2'] || []), ...(res['zhilian_scraped_data_v1'] || [])];
+                if (res.zhilian_single_details) {
+                    const zlDetailsDict = {};
+                    res.zhilian_single_details.forEach(d => { if (d['职位ID']) zlDetailsDict[d['职位ID']] = d; });
+                    zhilianList.forEach(job => {
+                        const jId = job.jobId || job['职位ID'] || job.number;
+                        const detail = zlDetailsDict[jId];
+                        if (detail) {
+                            for (const key of Object.keys(detail)) {
+                                if (detail[key] && detail[key] !== '' && !job[key]) {
+                                    job[key] = detail[key];
+                                }
+                            }
+                        }
+                    });
+                    const existingZlIds = new Set(zhilianList.map(j => j.jobId || j['职位ID'] || j.number));
+                    const standaloneZl = res.zhilian_single_details.filter(d => d['职位ID'] && !existingZlIds.has(d['职位ID']));
+                    zhilianList = [...zhilianList, ...standaloneZl];
+                }
+
                 window.zhilianEnrichmentCache = res.zhilian_enrichment_cache || {};
                 window.userJobTags = res.user_job_tags || {};
                 const datasets = {
                     boss: res['boss_scraped_v2'] || [],
                     '51job': job51List,
                     liepin: liepinList,
-                    zhilian: [...(res['zhilian_scraped_data_v2'] || []), ...(res['zhilian_scraped_data_v1'] || [])]
+                    zhilian: zhilianList
                 };
                 const companyDatabases = {
                     boss: res['boss_companies_scraped'] || [],
@@ -799,7 +840,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let storageKeys = ['boss_scraped_v2', 'boss_single_details', 'user_job_tags'];
         if (currentSource === '51job-data') storageKeys = ['51job_scraped_v2', '51job_single_details', 'user_job_tags'];
         if (currentSource === 'liepin-data') storageKeys = ['liepin_scraped_data_v1', 'liepin_single_details', 'user_job_tags'];
-        if (currentSource === 'zhilian-data') storageKeys = ['zhilian_scraped_data_v2', 'zhilian_scraped_data_v1', 'zhilian_enrichment_cache', 'user_job_tags'];
+        if (currentSource === 'zhilian-data') storageKeys = ['zhilian_scraped_v2', 'zhilian_single_details', 'zhilian_scraped_data_v2', 'zhilian_scraped_data_v1', 'zhilian_enrichment_cache', 'user_job_tags'];
 
         chrome.storage.local.get(storageKeys, (res) => {
             window.userJobTags = res.user_job_tags || {};
@@ -862,16 +903,35 @@ document.addEventListener('DOMContentLoaded', () => {
             if (normalizedSource === 'boss') normalizedSource = 'boss';
 
             if (currentSource === 'zhilian-data') {
-                const v2Raw = res['zhilian_scraped_data_v2'] || [];
+                const v2Raw = res['zhilian_scraped_v2'] || res['zhilian_scraped_data_v2'] || [];
                 const v1Raw = res['zhilian_scraped_data_v1'] || [];
-                const v2Norm = v2Raw.map(job => normalizeJob(job, 'zhilian'));
-                const v1Norm = v1Raw.map(job => normalizeJob(job, 'zhilian'));
+                const singleRaw = res['zhilian_single_details'] || [];
 
+                let combinedZl = [...v2Raw, ...v1Raw];
+                if (singleRaw.length > 0) {
+                    const detailsDict = {};
+                    singleRaw.forEach(d => { if (d['职位ID']) detailsDict[d['职位ID']] = d; });
+                    combinedZl.forEach(job => {
+                        const jId = job.jobId || job['职位ID'] || job.number;
+                        const detail = detailsDict[jId];
+                        if (detail) {
+                            for (const key of Object.keys(detail)) {
+                                if (detail[key] && detail[key] !== '' && !job[key]) {
+                                    job[key] = detail[key];
+                                }
+                            }
+                        }
+                    });
+                    const existingIds = new Set(combinedZl.map(j => j.jobId || j['职位ID'] || j.number));
+                    const standaloneZl = singleRaw.filter(d => d['职位ID'] && !existingIds.has(d['职位ID']));
+                    combinedZl = [...combinedZl, ...standaloneZl];
+                }
+
+                const normList = combinedZl.map(job => normalizeJob(job, 'zhilian'));
                 const seenIds = new Set();
                 const deduplicated = [];
 
-                // 先插入 V2（V2优先级高）
-                v2Norm.forEach(job => {
+                normList.forEach(job => {
                     const id = job['职位ID'] || (job['公司全称'] + '|||' + job['职位名称']);
                     if (!seenIds.has(id)) {
                         seenIds.add(id);
@@ -1877,7 +1937,7 @@ document.addEventListener('DOMContentLoaded', () => {
         'favorited_jobs', 'interview_questions', 'job_interviews', 'job_statuses',
         'liepin_companies_db_v1', 'liepin_company_details', 'liepin_scraped_data_v1', 'liepin_single_details',
         'user_job_tags',
-        'zhilian_company_cache', 'zhilian_enrichment_cache', 'zhilian_scraped_data_v1', 'zhilian_scraped_data_v2'
+        'zhilian_company_cache', 'zhilian_enrichment_cache', 'zhilian_scraped_data_v1', 'zhilian_scraped_data_v2', 'zhilian_scraped_v2', 'zhilian_single_details'
     ];
 
     if (btnSyncData && syncModal) {

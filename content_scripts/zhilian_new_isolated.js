@@ -25,28 +25,65 @@
         return String(str).replace(/[\r\n]+/g, ' ').replace(/"/g, '""').trim();
     }
 
-    function extractInitialState() {
+    function cleanMultiLineStr(str) {
+        if (str == null) return '';
+        if (Array.isArray(str)) str = str.join('\n');
+        return String(str).replace(/"/g, '""').trim();
+    }
+
+    function formatActiveTime(desc) {
+        let activeTime = cleanStr(desc);
+        if (activeTime === '刚刚活跃' || activeTime === '今日活跃' || activeTime === '在线' || activeTime === '刚刚在线') {
+            const today = new Date();
+            const yyyy = today.getFullYear();
+            const mm = String(today.getMonth() + 1).padStart(2, '0');
+            const dd = String(today.getDate()).padStart(2, '0');
+            return `${yyyy}-${mm}-${dd}`;
+        }
+        return activeTime;
+    }
+
+    // 强健解析 script 标签中的 __INITIAL_STATE__
+    function extractInitialStateObject() {
         try {
             const scripts = document.querySelectorAll('script');
-            let stateJson = null;
             for (let s of scripts) {
-                if (s.innerHTML.includes('__INITIAL_STATE__')) {
-                    const str = s.innerHTML.trim();
-                    const prefix = '__INITIAL_STATE__=';
-                    if (str.startsWith(prefix)) {
-                        stateJson = str.substring(prefix.length);
-                        if (stateJson.endsWith(';')) {
-                            stateJson = stateJson.substring(0, stateJson.length - 1);
+                const text = s.innerHTML || s.textContent || '';
+                if (text.includes('__INITIAL_STATE__')) {
+                    // 正则提取
+                    const match = text.match(/__INITIAL_STATE__\s*=\s*(\{.*?\});?/s);
+                    if (match) {
+                        try { return JSON.parse(match[1]); } catch (e) {}
+                    }
+                    // 子字符串截取提取兜底
+                    const startIdx = text.indexOf('__INITIAL_STATE__');
+                    if (startIdx !== -1) {
+                        const objStart = text.indexOf('{', startIdx);
+                        if (objStart !== -1) {
+                            let jsonStr = text.substring(objStart).trim();
+                            const lastClose = jsonStr.lastIndexOf('}');
+                            if (lastClose !== -1) {
+                                jsonStr = jsonStr.substring(0, lastClose + 1);
+                                try { return JSON.parse(jsonStr); } catch (e) {}
+                            }
                         }
-                        break;
                     }
                 }
             }
+        } catch (e) {
+            console.error('[Zhilian Scraper] extractInitialStateObject error:', e);
+        }
+        return null;
+    }
 
-            if (stateJson) {
-                const state = JSON.parse(stateJson);
-
-                const jobs = state.positionList || (state.searchResult && state.searchResult.positionList) || (state.jobList && state.jobList.list) || [];
+    function extractInitialState() {
+        try {
+            const state = extractInitialStateObject();
+            if (state) {
+                const jobs = state.positionList ||
+                    (state.searchResult && state.searchResult.positionList) ||
+                    (state.jobList && state.jobList.list) ||
+                    (state.data && state.data.list) || [];
 
                 if (jobs.length > 0) {
                     jobs.forEach(job => {
@@ -215,13 +252,21 @@
         clearTimeout(waitTimer);
 
         const data = json || {};
-        const job = data.jobDetail || data.position || data;
+        const jobDetailData = data.jobDetail || data;
+        const pos = jobDetailData.detailedPosition || jobDetailData.position || data.position || {};
+        const base = pos.base || {};
+        const desc = pos.desc || {};
+        const workLocation = pos.workLocation || {};
+        const comp = jobDetailData.detailedCompany || jobDetailData.company || data.company || {};
+        const staff = pos.staff || jobDetailData.staff || data.staff || {};
+
         const jobId = cleanStr(
-            job.number ||
-            job.positionNumber ||
-            (job.base && job.base.positionNumber) ||
+            pos.number ||
+            pos.positionNumber ||
+            base.positionNumber ||
             (data.data && data.data.number) ||
-            (data.detailedPosition && data.detailedPosition.positionNumber)
+            (data.detailedPosition && data.detailedPosition.positionNumber) ||
+            data.number
         );
         const finalJobId = jobId || (currentList[currentIndex] ? currentList[currentIndex].jobId : null);
 
@@ -245,47 +290,203 @@
         row['数据来源'] = 'zhilian_scraped_v2';
         row['职位ID'] = finalJobId;
 
-        // Basic fields mapping for easier viewing in UI
-        row['职位名称'] = row.name ||
-            (row.position && row.position.base && row.position.base.positionName) ||
-            (row.jobDetail && row.jobDetail.position && row.jobDetail.position.base && row.jobDetail.position.base.positionName) ||
-            (row.detailedPosition && row.detailedPosition.positionName) || '';
+        // 全面映射结构化中文标准字段
+        row['职位名称'] = cleanStr(
+            pos.positionName || pos.name || base.positionName || base.name ||
+            row.name || row.jobName || (row.position && row.position.base && row.position.base.positionName)
+        );
 
-        row['公司全称'] = row.companyName ||
-            (row.jobDetail && row.jobDetail.company && row.jobDetail.company.name) ||
-            (row.detailedCompany && row.detailedCompany.companyName) || '';
+        row['薪资待遇'] = cleanStr(
+            pos.salary || base.salary || base.salary60 || row.salary60 || row.salary
+        );
+
+        row['工作经验'] = cleanStr(
+            pos.positionWorkingExp || pos.workingExp || base.positionWorkingExp || base.workingExp || row.workingExp
+        );
+
+        row['学历要求'] = cleanStr(
+            pos.education || base.education || row.education
+        );
+
+        const cityStr = [
+            pos.positionWorkCity || pos.workCity || workLocation.cityName || row.workCity,
+            pos.positionCityDistrict || pos.cityDistrict || workLocation.cityDistrict || row.cityDistrict
+        ].filter(Boolean).join('·');
+        row['工作城市'] = cityStr;
+        row['工作地点'] = cityStr || cleanStr(pos.workCity || row.workCity);
+
+        row['详细完整地址'] = cleanStr(
+            pos.workAddress || workLocation.workAddress || row.workAddress
+        );
+        row['经度'] = pos.longitude || workLocation.longitude || '';
+        row['纬度'] = pos.latitude || workLocation.latitude || '';
+
+        row['职位描述'] = cleanMultiLineStr(
+            pos.description || pos.jobDesc || desc.description || row.jobDesc
+        );
+
+        const skillsArr = (pos.skillLabel || []).map(s => s?.value || s?.name || s).filter(Boolean).concat(
+            (desc.labels || []).map(s => s?.typeName || s?.name || s).filter(Boolean)
+        );
+        row['技能标签'] = skillsArr.length > 0 ? skillsArr.join(',') : cleanStr(row.jobSkillTags ? row.jobSkillTags.map(s => s.name || s.value).join(',') : '');
+
+        row['公司名称'] = cleanStr(
+            comp.companyShotName || comp.kgDisplayShortName || comp.companyName || comp.name || row.companyName
+        );
+
+        row['公司全称'] = cleanStr(
+            comp.companyName || comp.name || row.companyName || row['公司名称']
+        );
+
+        row['公司ID'] = cleanStr(
+            comp.companyNumber || pos.companyNumber || row.companyNumber
+        );
+
+        row['公司行业'] = cleanStr(
+            comp.industryNameLevel || comp.industryLevel || comp.industryName || row.industryName
+        );
+
+        row['公司规模'] = cleanStr(
+            comp.companySize || comp.size || row.companySize
+        );
+
+        row['融资阶段'] = cleanStr(
+            comp.financingStageName || row.financingStage?.name
+        );
+
+        row['HR姓名'] = cleanStr(
+            staff.staffName || row.staff?.staffName
+        );
+
+        row['HR职位'] = cleanStr(
+            staff.hrJob || row.staff?.hrJob
+        );
+
+        row['HR活跃度'] = cleanStr(
+            staff.hrOnlineState || staff.lastOnlineTimeText || row.staff?.hrOnlineState
+        );
+
+        row['职位链接'] = row.positionURL || `https://www.zhaopin.com/jobdetail/${finalJobId}.htm`;
+        row['干净链接'] = row['职位链接'];
+
+        row['页面更新时间'] = cleanStr(
+            pos.positionPublishTime || pos.publishTime || row.publishTime
+        );
 
         upsertData(finalJobId, row, () => {
-            console.log(`✅ [已更新 ${scrapedData.length}] ${finalJobId} | ${row['职位名称']}`);
+            console.log(`✅ [已更新 ${scrapedData.length}] ${finalJobId} | ${row['职位名称']} | ${row['公司全称']} | ${row['薪资待遇']}`);
             scheduleNextJob();
         });
     }
 
+    // 从页面 DOM 元素中提取详情数据（用于兜底或无 __INITIAL_STATE__ 的页面）
+    function extractDetailFromDOM() {
+        const dom = {};
+        try {
+            // 1. 职位标题
+            const titleEl = document.querySelector('.summary-planes__title span, .summary-planes__title, h1.summary-planes__title, .job-summary h1');
+            if (titleEl) dom['职位名称'] = cleanStr(titleEl.textContent);
+
+            // 2. 薪资
+            const salaryEl = document.querySelector('.summary-planes__salary, .job-summary .salary');
+            if (salaryEl) dom['薪资待遇'] = cleanStr(salaryEl.textContent);
+
+            // 3. 基础信息列表 (城市/经验/学历/性质/人数)
+            const infoLis = document.querySelectorAll('.summary-planes__info li, .job-summary__info li');
+            infoLis.forEach((li, index) => {
+                const text = cleanStr(li.textContent);
+                if (!text) return;
+                if (li.querySelector('.workCity-link') || (index === 0 && !text.includes('年') && !text.includes('本') && !text.includes('专'))) {
+                    dom['工作地点'] = text;
+                    const cityLink = li.querySelector('.workCity-link');
+                    if (cityLink) {
+                        const cityName = cleanStr(cityLink.textContent);
+                        const distSpan = li.querySelector('span');
+                        const distName = distSpan ? cleanStr(distSpan.textContent) : '';
+                        dom['工作城市'] = [cityName, distName].filter(Boolean).join('·');
+                    }
+                } else if (text.includes('年') || text.includes('经验') || text.includes('应届') || text.includes('不限')) {
+                    dom['工作经验'] = text;
+                } else if (/本科|大专|硕士|博士|中专|高中|初中|学历/.test(text)) {
+                    dom['学历要求'] = text;
+                } else if (/全职|兼职|实习|校招/.test(text)) {
+                    dom['工作类型'] = text;
+                } else if (/招\d+人|若干/.test(text)) {
+                    dom['招聘人数'] = text;
+                }
+            });
+
+            // 4. 更新时间
+            const timeEl = document.querySelector('.summary-planes__time, .summary-planes__other span');
+            if (timeEl) dom['页面更新时间'] = cleanStr(timeEl.textContent).replace(/更新时间\s*/, '');
+
+            // 5. 技能标签
+            const skillEls = document.querySelectorAll('.describtion-card__skills-item, .skills-item, .job-summary__tags span');
+            if (skillEls.length > 0) {
+                dom['技能标签'] = Array.from(skillEls).map(el => cleanStr(el.textContent)).filter(Boolean).join(',');
+            }
+
+            // 6. 职位描述
+            const descEl = document.querySelector('.describtion-card__detail-content, .job-detail-content, .describtion-card');
+            if (descEl) dom['职位描述'] = cleanMultiLineStr(descEl.innerText);
+
+            // 7. 详细地址
+            const addrEl = document.querySelector('.address-info__bubble, .job-address, .address-info__content');
+            if (addrEl) dom['详细完整地址'] = cleanStr(addrEl.textContent);
+
+            // 8. 公司信息卡片
+            const compNameEl = document.querySelector('.company-info__name, .company-name');
+            if (compNameEl) {
+                dom['公司名称'] = cleanStr(compNameEl.textContent);
+                dom['公司全称'] = cleanStr(compNameEl.textContent);
+                const href = compNameEl.getAttribute('href') || '';
+                const m = href.match(/companydetail\/([A-Za-z0-9]+)/);
+                if (m) dom['公司ID'] = m[1];
+            }
+
+            // 9. 公司规模/行业/融资
+            const compDescEl = document.querySelector('.company-info__desc');
+            if (compDescEl) {
+                const descText = cleanStr(compDescEl.textContent);
+                const parts = descText.split(/[\s·]+/).filter(Boolean);
+                parts.forEach(part => {
+                    if (/人$/.test(part) || /人以上$/.test(part) || /少于\d+人/.test(part)) {
+                        dom['公司规模'] = part;
+                    } else if (/融资|未融资|上市|不需要融资|天使轮|A轮|B轮|C轮|D轮/.test(part)) {
+                        dom['融资阶段'] = part;
+                    } else if (!dom['公司行业'] && part !== '已审核' && part !== '未审核') {
+                        dom['公司行业'] = part;
+                    }
+                });
+            }
+
+            // 10. 工商信息
+            const bizItems = document.querySelectorAll('.company-info__business-item');
+            bizItems.forEach(item => {
+                const label = cleanStr(item.querySelector('.company-info__business-label')?.textContent);
+                const value = cleanStr(item.querySelector('.company-info__business-value')?.textContent);
+                if (!label || !value) return;
+                if (label.includes('企业名称')) dom['公司全称'] = value;
+                else if (label.includes('法人代表') || label.includes('法定代表人')) dom['法定代表人'] = value;
+                else if (label.includes('企业类型')) dom['企业类型'] = value;
+                else if (label.includes('经营状态')) dom['经营状态'] = value;
+                else if (label.includes('成立时间') || label.includes('成立日期')) dom['成立日期'] = value;
+                else if (label.includes('注册资本') || label.includes('注册资金')) dom['注册资金'] = value;
+            });
+
+        } catch (e) {
+            console.error('[Zhilian Scraper] extractDetailFromDOM error:', e);
+        }
+        return dom;
+    }
+
     function scrapeSinglePage() {
         try {
-            const m = location.href.match(/\/jobdetail\/([^.?#]+)\.htm/);
-            const jobId = m ? m[1] : `ID_${Date.now()}`;
+            const m = location.href.match(/\/jobdetail\/([^.?#]+)\.htm/) || location.href.match(/(CC[0-9A-Za-z]+)\.htm/);
+            const jobId = m ? (m[1] || m[0].replace('.htm', '')) : `ID_${Date.now()}`;
 
-            let initialState = null;
-            const scripts = document.querySelectorAll('script');
-            for (let s of scripts) {
-                const text = s.innerHTML || s.textContent || '';
-                const prefix = '__INITIAL_STATE__=';
-                if (text.includes(prefix)) {
-                    const startIndex = text.indexOf(prefix);
-                    let jsonStr = text.substring(startIndex + prefix.length);
-                    jsonStr = jsonStr.trim();
-                    if (jsonStr.endsWith(';')) {
-                        jsonStr = jsonStr.substring(0, jsonStr.length - 1);
-                    }
-                    try {
-                        initialState = JSON.parse(jsonStr);
-                    } catch (e) {
-                        console.error('[Zhilian Scraper] Parse __INITIAL_STATE__ error in scrapeSinglePage:', e);
-                    }
-                    break;
-                }
-            }
+            const initialState = extractInitialStateObject();
+            const domData = extractDetailFromDOM();
 
             const row = {
                 '职位ID': jobId,
@@ -293,116 +494,154 @@
                 '数据来源': 'zhilian_scraped_v2', // 统一使用新版处理逻辑
                 'platform': 'zhilian',
                 'dataSource': 'zhilian_scraped_v2',
-                '抓取时间': new Date().toLocaleString()
+                '抓取时间': new Date().toLocaleString(),
+                '职位链接': location.href.split('?')[0],
+                '干净链接': location.href.split('?')[0]
             };
 
+            // 1. 如果有 initialState，优先提取结构化 JSON 数据
             if (initialState) {
                 if (initialState.jobDetail) {
                     row.jobDetail = initialState.jobDetail;
                 } else {
-                    Object.assign(row, initialState);
+                    row.jobDetail = initialState;
                 }
 
-                chrome.storage.local.get([
-                    'zhilian_single_details',
-                    'zhilian_enrichment_cache',
-                    'zhilian_company_cache'
-                ], (res) => {
-                    // 1. 保存职位详情
-                    const list = res.zhilian_single_details || [];
-                    const idx = list.findIndex(item => item['职位ID'] === jobId);
-                    if (idx >= 0) {
-                        list[idx] = row;
-                    } else {
-                        list.push(row);
-                    }
+                const jobDetail = initialState.jobDetail || initialState;
+                const pos = jobDetail.detailedPosition || jobDetail.position || {};
+                const base = pos.base || {};
+                const desc = pos.desc || {};
+                const comp = jobDetail.detailedCompany || jobDetail.company || {};
+                const staff = pos.staff || jobDetail.staff || {};
+                const biz = initialState.companyExtDetail?.businessInformation?.businessInformationData || {};
 
-                    let cache = res.zhilian_enrichment_cache || {};
-                    let companyCache = res.zhilian_company_cache || {};
-                    let cacheUpdated = false;
-                    let companyCacheUpdated = false;
+                row['职位名称'] = cleanStr(pos.positionName || pos.name || base.positionName || base.name);
+                row['薪资待遇'] = cleanStr(pos.salary || base.salary || base.salary60);
+                row['工作经验'] = cleanStr(pos.positionWorkingExp || pos.workingExp || base.positionWorkingExp || base.workingExp);
+                row['学历要求'] = cleanStr(pos.education || base.education);
+                row['工作城市'] = [pos.positionWorkCity || pos.workCity || pos.workLocation?.cityName, pos.positionCityDistrict || pos.cityDistrict || pos.workLocation?.cityDistrict].filter(Boolean).join('·');
+                row['工作地点'] = row['工作城市'] || cleanStr(pos.workCity);
+                row['详细完整地址'] = cleanStr(pos.workAddress || pos.workLocation?.workAddress);
+                row['经度'] = pos.longitude || pos.workLocation?.longitude || '';
+                row['纬度'] = pos.latitude || pos.workLocation?.latitude || '';
+                row['职位描述'] = cleanMultiLineStr(pos.description || pos.jobDesc || desc.description);
+                row['技能标签'] = (pos.skillLabel || []).map(s => s?.value || s?.name || s).filter(Boolean).join(',') ||
+                                  (desc.labels || []).map(s => s?.typeName || s?.name || s).filter(Boolean).join(',');
+                row['公司名称'] = cleanStr(comp.companyShotName || comp.kgDisplayShortName || comp.companyName || comp.name || pos.companyName);
+                row['公司全称'] = cleanStr(comp.companyName || comp.name || biz.registeredName || pos.companyName);
+                row['公司ID'] = cleanStr(comp.companyNumber || pos.companyNumber);
+                row['公司行业'] = cleanStr(comp.industryNameLevel || comp.industryLevel || comp.industryName);
+                row['公司规模'] = cleanStr(comp.companySize || comp.size);
+                row['融资阶段'] = cleanStr(comp.financingStageName);
+                row['公司福利'] = (pos.welfareTags || []).filter(Boolean).join(',');
+                row['HR姓名'] = cleanStr(staff.staffName);
+                row['HR职位'] = cleanStr(staff.hrJob);
+                row['HR活跃度'] = cleanStr(staff.hrOnlineState || staff.lastOnlineTimeText);
+                row['法定代表人'] = cleanStr(biz.legalPerson);
+                row['企业类型'] = cleanStr(biz.epType);
+                row['成立日期'] = cleanStr(biz.createDate);
+                row['经营状态'] = cleanStr(biz.epStatus);
+                row['注册资金'] = cleanStr(biz.registeredCapital);
+                row['统一社会信用代码'] = cleanStr(biz.epCertNo);
+                row['页面更新时间'] = cleanStr(pos.positionPublishTime || pos.publishTime);
+                row['发布时间'] = cleanStr(pos.positionPublishTime || pos.publishTime);
+            }
 
-                    // 2. 保存推荐职位到影子库
-                    if (initialState.jobDeliverList && Array.isArray(initialState.jobDeliverList)) {
-                        initialState.jobDeliverList.forEach(jobItem => {
-                            const recJobId = jobItem.number || jobItem.positionNumber;
-                            if (recJobId) {
-                                cache[recJobId] = jobItem;
-                                cacheUpdated = true;
-                            }
-                        });
-                        console.log(`[Zhilian Scraper] 已提取 ${initialState.jobDeliverList.length} 个推荐职位至影子库`);
-                    }
+            // 2. 用 DOM 提取的数据对缺失字段进行兜底补全（当 initialState 缺失或为空时生效）
+            for (let [k, v] of Object.entries(domData)) {
+                if (!row[k] && v) {
+                    row[k] = v;
+                }
+            }
 
-                    // 3. 保存公司详情到影子库
-                    if (initialState.companyExtDetail) {
-                        const comp = (initialState.jobDetail && initialState.jobDetail.detailedCompany) || {};
-                        const compNumber = comp.companyNumber || '';
-                        const compUrl = comp.url || '';
-                        if (compNumber) {
-                            companyCache[compNumber] = Object.assign({}, initialState.companyExtDetail, {
-                                companyNumber: compNumber,
-                                url: compUrl
-                            });
-                            companyCacheUpdated = true;
+            // 基础校验
+            if (!row['职位名称'] && !row['公司名称']) {
+                console.warn('[Zhilian Scraper] 未能从详情页提取到有效职位名称与公司信息');
+            }
+
+            chrome.storage.local.get([
+                'zhilian_single_details',
+                'zhilian_enrichment_cache',
+                'zhilian_company_cache'
+            ], (res) => {
+                // 1. 保存职位详情至 zhilian_single_details
+                const list = res.zhilian_single_details || [];
+                const idx = list.findIndex(item => item['职位ID'] === jobId);
+                if (idx >= 0) {
+                    list[idx] = row;
+                } else {
+                    list.push(row);
+                }
+
+                let cache = res.zhilian_enrichment_cache || {};
+                let companyCache = res.zhilian_company_cache || {};
+                let cacheUpdated = false;
+                let companyCacheUpdated = false;
+
+                // 2. 保存推荐职位到影子库
+                if (initialState && initialState.jobDeliverList && Array.isArray(initialState.jobDeliverList)) {
+                    initialState.jobDeliverList.forEach(jobItem => {
+                        const recJobId = jobItem.number || jobItem.positionNumber;
+                        if (recJobId) {
+                            cache[recJobId] = jobItem;
+                            cacheUpdated = true;
                         }
-                    }
+                    });
+                    console.log(`[Zhilian Scraper] 已提取 ${initialState.jobDeliverList.length} 个推荐职位至影子库`);
+                }
 
-                    let toSet = {
-                        'zhilian_single_details': list
+                // 3. 保存公司详情到影子库
+                const compNumber = row['公司ID'] || (initialState?.jobDetail?.detailedCompany?.companyNumber) || '';
+                if (compNumber) {
+                    const existingComp = companyCache[compNumber] || {};
+                    const compDetailObj = {
+                        ...existingComp,
+                        ...(initialState?.companyExtDetail || {}),
+                        companyNumber: compNumber,
+                        companyName: row['公司全称'] || row['公司名称'],
+                        legalPerson: row['法定代表人'] || existingComp.legalPerson || '',
+                        epType: row['企业类型'] || existingComp.epType || '',
+                        createDate: row['成立日期'] || existingComp.createDate || '',
+                        epStatus: row['经营状态'] || existingComp.epStatus || '',
+                        registeredCapital: row['注册资金'] || existingComp.registeredCapital || '',
+                        epCertNo: row['统一社会信用代码'] || existingComp.epCertNo || '',
+                        url: row['职位链接'] || existingComp.url || ''
                     };
-                    if (cacheUpdated) toSet.zhilian_enrichment_cache = cache;
-                    if (companyCacheUpdated) toSet.zhilian_company_cache = companyCache;
+                    companyCache[compNumber] = compDetailObj;
+                    companyCacheUpdated = true;
+                }
 
-                    chrome.storage.local.set(toSet, () => {
-                        showToast('✅ 职位详情、推荐列表及公司信息已分别更新至缓存！');
+                let toSet = {
+                    'zhilian_single_details': list
+                };
+                if (cacheUpdated) toSet.zhilian_enrichment_cache = cache;
+                if (companyCacheUpdated) toSet.zhilian_company_cache = companyCache;
 
-                        // 同步职位详情到本地服务器
-                        fetch('http://localhost:3000/api/job-details', {
+                chrome.storage.local.set(toSet, () => {
+                    showToast(`✅ 智联职位【${row['职位名称'] || jobId}】已成功解析并保存！`);
+                    console.log(`[Zhilian Scraper] 职位详情已保存到 zhilian_single_details:`, row);
+
+                    // 同步职位详情到本地服务器
+                    fetch('http://localhost:3000/api/job-details', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify([row])
+                    }).catch(err => {
+                        console.log('[Zhilian Scraper] Local server job detail sync failed:', err);
+                    });
+
+                    // 同步影子数据库到本地项目
+                    if (cacheUpdated) {
+                        fetch('http://localhost:3000/api/zhilian-cache', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify([row])
+                            body: JSON.stringify(cache)
                         }).catch(err => {
-                            console.log('[Zhilian Scraper] Local server job detail sync failed:', err);
+                            console.log('[Zhilian Scraper] Local server cache sync failed:', err);
                         });
-                        // 同步职位详情到远程服务器 (已注释)
-                        // fetch('https://job-dashboard-bgr.pages.dev/api/job-details', {
-                        //     method: 'POST',
-                        //     headers: { 'Content-Type': 'application/json' },
-                        //     body: JSON.stringify([row])
-                        // }).catch(err => {
-                        //     console.log('[Zhilian Scraper] Remote server job detail sync failed (expected if not running):', err);
-                        // });
-
-                        // 同步影子数据库到本地项目
-                        if (cacheUpdated) {
-                            fetch('http://localhost:3000/api/zhilian-cache', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify(cache)
-                            }).catch(err => {
-                                console.log('[Zhilian Scraper] Local server cache sync failed:', err);
-                            });
-                        }
-                        // 同步影子数据库到远程 服务器 (已注释)
-                        // if (cacheUpdated) {
-                        //     fetch('https://job-dashboard-bgr.pages.dev/api/zhilian-cache', {
-                        //         method: 'POST',
-                        //         headers: { 'Content-Type': 'application/json' },
-                        //         body: JSON.stringify(cache)
-                        //     }).catch(err => {
-                        //         console.log('[Zhilian Scraper] Local server cache sync failed:', err);
-                        //     });
-                        // }
-
-                        // 企业信息已随 row 提交给 /api/job-details，由服务端 job-details 接口自动联动更新 Company 表并写入 rawData3
-                        // 此处无需再独立调用 /api/companies 接口
-                    });
+                    }
                 });
-
-            } else {
-                console.warn('[Zhilian Scraper] 未在详情页找到 __INITIAL_STATE__');
-            }
+            });
 
         } catch (err) {
             console.error('[Zhilian Scraper] 抓取详情页时报错:', err);
@@ -641,11 +880,48 @@
         }, 500);
     }
 
-    if (location.href.includes('/jobdetail/')) {
-        setTimeout(() => {
-            const m = location.href.match(/\/jobdetail\/([^.?#]+)\.htm/);
-            const jobId = m ? m[1] : null;
+    function injectFloatingButton() {
+        if (document.getElementById('zhilian-detail-scraper-btn')) return;
+        const btn = document.createElement('button');
+        btn.id = 'zhilian-detail-scraper-btn';
+        btn.innerHTML = '⚡ 重新抓取本页职位';
+        btn.style.cssText = `
+            position: fixed;
+            bottom: 80px;
+            right: 25px;
+            z-index: 999999;
+            background: linear-gradient(135deg, #00c2b3 0%, #009688 100%);
+            color: #ffffff;
+            border: none;
+            padding: 10px 18px;
+            border-radius: 24px;
+            font-size: 14px;
+            font-weight: bold;
+            box-shadow: 0 4px 15px rgba(0, 194, 179, 0.4);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            outline: none;
+        `;
+        btn.onmouseover = () => { btn.style.transform = 'translateY(-2px) scale(1.05)'; };
+        btn.onmouseout = () => { btn.style.transform = 'translateY(0) scale(1)'; };
+        btn.onclick = () => {
+            btn.innerHTML = '⏳ 抓取中...';
+            scrapeSinglePage();
+            setTimeout(() => {
+                btn.innerHTML = '✅ 抓取完成';
+                setTimeout(() => { btn.innerHTML = '⚡ 重新抓取本页职位'; }, 2000);
+            }, 1000);
+        };
+        document.body.appendChild(btn);
+    }
 
+    const isJobDetailPage = location.href.includes('/jobdetail/') ||
+        (location.host === 'jobs.zhaopin.com' && location.pathname.endsWith('.htm')) ||
+        location.href.includes('/jobs/');
+
+    if (isJobDetailPage) {
+        setTimeout(() => {
+            injectFloatingButton();
             scrapeSinglePage();
 
             if (location.href.includes('auto_close=1')) {
@@ -656,6 +932,6 @@
                     } catch (e) { }
                 }, 5000);
             }
-        }, 2000);
+        }, 1500);
     }
 })();
