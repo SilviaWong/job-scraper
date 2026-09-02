@@ -144,37 +144,6 @@
 
                 if (companyCacheUpdated) {
                     toSet.zhilian_company_cache = companyCache;
-
-                    // 同步刚刚解析到的公司数据到本地项目
-                    const comp = (initialState.jobDetail && initialState.jobDetail.detailedCompany) || {};
-                    const compNumber = comp.companyNumber || '';
-                    if (compNumber) {
-                        const companyToSync = {
-                            ...companyCache[compNumber],
-                            companyName: comp.companyName, // 补齐公司名称，后端接口解析需要
-                            platform: 'zhilian',
-                            dataSource: 'zhilian_company_cache',
-                            '平台': 'zhilian',
-                            '数据来源': 'zhilian_company_cache'
-                        };
-                        fetch('http://localhost:3000/api/companies', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify([companyToSync])
-                        }).catch(err => {
-                            console.log('[Zhilian Scraper] Local server company sync failed:', err);
-                        });
-
-                        // https://job-dashboard-bgr.pages.dev (已注释)
-                        // fetch('https://job-dashboard-bgr.pages.dev/api/companies', {
-                        //     method: 'POST',
-                        //     headers: { 'Content-Type': 'application/json' },
-                        //     body: JSON.stringify([companyToSync])
-                        // }).catch(err => {
-                        //     // 如果远程服务器未开启，这里会忽略错误，不影响原有逻辑
-                        //     console.log('[Zhilian Scraper] Remote server company sync failed (expected if not running):', err);
-                        // });
-                    }
                 }
 
                 if (Object.keys(toSet).length > 0) {

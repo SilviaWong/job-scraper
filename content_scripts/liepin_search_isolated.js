@@ -458,7 +458,7 @@
                 console.log(`[Liepin Scraper] 职位详情已保存到 liepin_single_details: ${row['职位名称']} (${jobId})`);
             });
 
-            // 同步职位详情到本地服务器 (若存在)
+            // 同步职位详情到本地服务器 (若存在，服务端 job-details 接口会自动联动更新 Company 表并写入 rawData3)
             fetch('http://localhost:3000/api/job-details', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -466,17 +466,6 @@
             }).catch(err => {
                 console.log('[Liepin Scraper] Local server single detail sync failed (expected if not running):', err);
             });
-
-            // 同步新增公司至本地服务器 (若存在)
-            if (newlyAddedComps.length > 0) {
-                fetch('http://localhost:3000/api/companies', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(newlyAddedComps)
-                }).catch(err => {
-                    console.log('[Liepin Scraper] Local server company sync failed (expected if not running):', err);
-                });
-            }
         });
     }
 

@@ -413,7 +413,7 @@
                 //     });
                 // }
 
-                // 单独推送职位详情数据 到本地服务
+                // 单独推送职位详情数据 到本地服务（服务端 job-details 接口会自动联动更新 Company 表并写入 rawData3）
                 fetch('http://localhost:3000/api/job-details', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -421,17 +421,6 @@
                 }).catch(err => {
                     console.log('[Boss Scraper] Local server single detail sync failed:', err);
                 });
-
-                // 同步提取到的企业工商数据到本地企业库
-                if (currentCompData) {
-                    fetch('http://localhost:3000/api/companies', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify([currentCompData])
-                    }).catch(err => {
-                        console.log('[Boss Scraper] Local server company sync failed:', err);
-                    });
-                }
 
                 // 推送职位详情数据 到远程服务 (已注释)
                 // https://job-dashboard-bgr.pages.dev

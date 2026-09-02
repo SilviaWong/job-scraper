@@ -302,21 +302,12 @@
                     }
                     console.log(`[51job Detail] 职位详情已成功抓取: ${row['职位名称']} (${jobId})`);
 
-                    // 尝试推送职位详情到本地服务器
+                    // 尝试推送职位详情到本地服务器（服务端 job-details 接口会自动联动更新 Company 表并写入 rawData3）
                     fetch('http://localhost:3000/api/job-details', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify([row])
                     }).catch(() => {});
-
-                    // 尝试推送企业信息到本地服务器
-                    if (newlyAddedComp) {
-                        fetch('http://localhost:3000/api/companies', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify([newlyAddedComp])
-                        }).catch(() => {});
-                    }
                 });
 
             } catch (err) {
