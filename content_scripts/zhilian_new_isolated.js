@@ -50,23 +50,28 @@
             for (let s of scripts) {
                 const text = s.innerHTML || s.textContent || '';
                 if (text.includes('__INITIAL_STATE__')) {
-                    // 正则提取
+                    const startIdx = text.indexOf('__INITIAL_STATE__');
+                    if (startIdx !== -1) {
+                        const eqIdx = text.indexOf('=', startIdx);
+                        if (eqIdx !== -1) {
+                            let jsonStr = text.substring(eqIdx + 1).trim();
+                            if (jsonStr.endsWith(';')) jsonStr = jsonStr.slice(0, -1);
+                            try {
+                                return JSON.parse(jsonStr);
+                            } catch (e) {
+                                const lastClose = jsonStr.lastIndexOf('}');
+                                if (lastClose !== -1) {
+                                    try {
+                                        return JSON.parse(jsonStr.substring(0, lastClose + 1));
+                                    } catch (err) {}
+                                }
+                            }
+                        }
+                    }
+                    // 正则提取兜底
                     const match = text.match(/__INITIAL_STATE__\s*=\s*(\{.*?\});?/s);
                     if (match) {
                         try { return JSON.parse(match[1]); } catch (e) {}
-                    }
-                    // 子字符串截取提取兜底
-                    const startIdx = text.indexOf('__INITIAL_STATE__');
-                    if (startIdx !== -1) {
-                        const objStart = text.indexOf('{', startIdx);
-                        if (objStart !== -1) {
-                            let jsonStr = text.substring(objStart).trim();
-                            const lastClose = jsonStr.lastIndexOf('}');
-                            if (lastClose !== -1) {
-                                jsonStr = jsonStr.substring(0, lastClose + 1);
-                                try { return JSON.parse(jsonStr); } catch (e) {}
-                            }
-                        }
                     }
                 }
             }
@@ -208,9 +213,9 @@
             });
         } else if (event.data.type === 'ZHILIAN_JOB_DETAIL') {
             const data = event.data.data;
-            const jobInfo = data.data || data;
-            const detailJobInfo = jobInfo.jobDetail || jobInfo.position || jobInfo;
-            const jobId = cleanStr(detailJobInfo.number || detailJobInfo.positionNumber || (detailJobInfo.base && detailJobInfo.base.positionNumber));
+            const jobInfo = data?.data || data || {};
+            const pos = jobInfo.detailedPosition || jobInfo.position || jobInfo.jobDetail?.detailedPosition || jobInfo.jobDetail?.position || jobInfo.jobDetail || jobInfo;
+            const jobId = cleanStr(pos.number || pos.positionNumber || (pos.base && pos.base.positionNumber) || jobInfo.number || jobInfo.positionNumber || data?.number);
 
             if (jobId) {
                 interceptedDetailJobs.set(jobId, jobInfo);
@@ -384,24 +389,24 @@
         const dom = {};
         try {
             // 1. 职位标题
-            const titleEl = document.querySelector('.summary-planes__title span, .summary-planes__title, h1.summary-planes__title, .job-summary h1');
+            const titleEl = document.querySelector('.summary-planes__title span, .summary-planes__title, h1.summary-planes__title, .job-summary h1, .job-detail-summary__title-text, .job-detail-summary__title');
             if (titleEl) dom['职位名称'] = cleanStr(titleEl.textContent);
 
             // 2. 薪资
-            const salaryEl = document.querySelector('.summary-planes__salary, .job-summary .salary');
+            const salaryEl = document.querySelector('.summary-planes__salary, .job-summary .salary, .job-detail-summary__salary');
             if (salaryEl) dom['薪资待遇'] = cleanStr(salaryEl.textContent);
 
             // 3. 基础信息列表 (城市/经验/学历/性质/人数)
-            const infoLis = document.querySelectorAll('.summary-planes__info li, .job-summary__info li');
+            const infoLis = document.querySelectorAll('.summary-planes__info li, .job-summary__info li, .job-detail-summary__info span, .job-detail-summary__tag');
             infoLis.forEach((li, index) => {
                 const text = cleanStr(li.textContent);
                 if (!text) return;
-                if (li.querySelector('.workCity-link') || (index === 0 && !text.includes('年') && !text.includes('本') && !text.includes('专'))) {
+                if (li.querySelector?.('.workCity-link') || (index === 0 && !text.includes('年') && !text.includes('本') && !text.includes('专') && !text.includes('校招') && !text.includes('普'))) {
                     dom['工作地点'] = text;
-                    const cityLink = li.querySelector('.workCity-link');
+                    const cityLink = li.querySelector?.('.workCity-link');
                     if (cityLink) {
                         const cityName = cleanStr(cityLink.textContent);
-                        const distSpan = li.querySelector('span');
+                        const distSpan = li.querySelector?.('span');
                         const distName = distSpan ? cleanStr(distSpan.textContent) : '';
                         dom['工作城市'] = [cityName, distName].filter(Boolean).join('·');
                     }
@@ -417,25 +422,25 @@
             });
 
             // 4. 更新时间
-            const timeEl = document.querySelector('.summary-planes__time, .summary-planes__other span');
+            const timeEl = document.querySelector('.summary-planes__time, .summary-planes__other span, .job-detail-summary__time');
             if (timeEl) dom['页面更新时间'] = cleanStr(timeEl.textContent).replace(/更新时间\s*/, '');
 
             // 5. 技能标签
-            const skillEls = document.querySelectorAll('.describtion-card__skills-item, .skills-item, .job-summary__tags span');
+            const skillEls = document.querySelectorAll('.describtion-card__skills-item, .skills-item, .job-summary__tags span, .job-detail-summary__tags span');
             if (skillEls.length > 0) {
                 dom['技能标签'] = Array.from(skillEls).map(el => cleanStr(el.textContent)).filter(Boolean).join(',');
             }
 
             // 6. 职位描述
-            const descEl = document.querySelector('.describtion-card__detail-content, .job-detail-content, .describtion-card');
+            const descEl = document.querySelector('.describtion-card__detail-content, .job-detail-content, .describtion-card, .job-detail-card__body, .job-detail-modules__detail');
             if (descEl) dom['职位描述'] = cleanMultiLineStr(descEl.innerText);
 
             // 7. 详细地址
-            const addrEl = document.querySelector('.address-info__bubble, .job-address, .address-info__content');
+            const addrEl = document.querySelector('.address-info__bubble, .job-address, .address-info__content, .job-detail-address__content, .job-detail-address__bubble');
             if (addrEl) dom['详细完整地址'] = cleanStr(addrEl.textContent);
 
             // 8. 公司信息卡片
-            const compNameEl = document.querySelector('.company-info__name, .company-name');
+            const compNameEl = document.querySelector('.company-info__name, .company-name, .job-detail-summary__company-name');
             if (compNameEl) {
                 dom['公司名称'] = cleanStr(compNameEl.textContent);
                 dom['公司全称'] = cleanStr(compNameEl.textContent);
@@ -564,6 +569,7 @@
                 'zhilian_enrichment_cache',
                 'zhilian_company_cache'
             ], (res) => {
+                res = res || {};
                 // 1. 保存职位详情至 zhilian_single_details
                 const list = res.zhilian_single_details || [];
                 const idx = list.findIndex(item => item['职位ID'] === jobId);
@@ -797,26 +803,62 @@
                 const simulateClick = (element) => {
                     if (!element) return;
                     try {
-                        const event = new MouseEvent('click', {
-                            view: window,
-                            bubbles: true,
-                            cancelable: true,
-                            buttons: 1
+                        ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(eventType => {
+                            element.dispatchEvent(new MouseEvent(eventType, {
+                                view: window,
+                                bubbles: true,
+                                cancelable: true,
+                                buttons: 1
+                            }));
                         });
-                        element.dispatchEvent(event);
                     } catch (e) {
                         try { element.click(); } catch (err) { }
                     }
                 };
 
                 try {
-                    const innerText = job.el.querySelector('.job-card__name, .job-card__title-main');
-                    simulateClick(innerText || job.el);
+                    const clickTarget = job.el.querySelector('.job-card__title-main, .job-card__title-row, .vue-clamp__text, .job-card__name, .jobinfo__name, a') || job.link || job.el;
+                    simulateClick(clickTarget);
                 } catch (e) { }
 
                 waitTimer = setTimeout(() => {
                     try { simulateClick(job.el); } catch (e) { }
                     waitTimer = setTimeout(() => {
+                        // 1. 检查是否在等待期间成功拦截到职位详情
+                        const lastCheck = interceptedDetailJobs.get(job.jobId);
+                        if (lastCheck) {
+                            onDetailApiCaptured(lastCheck);
+                            return;
+                        }
+
+                        // 2. 兜底策略：尝试从右侧详情区域提取已渲染的 DOM 详情
+                        const domDetail = extractDetailFromDOM();
+                        if (domDetail && (domDetail['职位名称'] || domDetail['职位描述'])) {
+                            console.log(`[Zhilian] Detail API not captured for ${job.jobId}, using DOM fallback.`);
+                            const row = {
+                                jobId: job.jobId,
+                                platform: 'zhilian',
+                                dataSource: 'zhilian_scraped_v2',
+                                '平台': 'zhilian',
+                                '数据来源': 'zhilian_scraped_v2',
+                                '职位ID': job.jobId,
+                                '职位链接': `https://www.zhaopin.com/jobdetail/${job.jobId}.htm`,
+                                '干净链接': `https://www.zhaopin.com/jobdetail/${job.jobId}.htm`,
+                                ...domDetail
+                            };
+                            if (interceptedListJobs.has(job.jobId)) {
+                                const listJob = interceptedListJobs.get(job.jobId);
+                                row['公司全称'] = row['公司全称'] || listJob.companyName || (listJob.company && listJob.company.name) || '';
+                                row['公司名称'] = row['公司名称'] || row['公司全称'];
+                                row['职位名称'] = row['职位名称'] || listJob.name || listJob.jobName || '';
+                                row['薪资待遇'] = row['薪资待遇'] || listJob.salary60 || listJob.salary || '';
+                            }
+                            upsertData(job.jobId, row, () => {
+                                scheduleNextJob();
+                            });
+                            return;
+                        }
+
                         console.warn(`[Zhilian] Detail API not captured for ${job.jobId}, skipping.`);
                         scheduleNextJob();
                     }, 4000);
@@ -915,9 +957,8 @@
         document.body.appendChild(btn);
     }
 
-    const isJobDetailPage = location.href.includes('/jobdetail/') ||
-        (location.host === 'jobs.zhaopin.com' && location.pathname.endsWith('.htm')) ||
-        location.href.includes('/jobs/');
+    const isJobDetailPage = location.pathname.includes('/jobdetail/') ||
+        (location.host === 'jobs.zhaopin.com' && /\.htm$/i.test(location.pathname));
 
     if (isJobDetailPage) {
         setTimeout(() => {
