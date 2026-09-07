@@ -939,15 +939,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 });
 
-                // 再插入 V1，过滤掉已存在于 V2 的重复项
-                v1Norm.forEach(job => {
-                    const id = job['职位ID'] || (job['公司全称'] + '|||' + job['职位名称']);
-                    if (!seenIds.has(id)) {
-                        seenIds.add(id);
-                        deduplicated.push(job);
-                    }
-                });
-
                 allData = deduplicated;
             } else if (currentSource === 'liepin-data') {
                 let rawData = [...(res['liepin_scraped_data_v1'] || [])];
