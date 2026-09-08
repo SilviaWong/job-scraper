@@ -2027,27 +2027,53 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // 清空全部
+    // 清除所有数据（一次性清除所有平台保存的数据：列表数据、详情数据、公司数据）
     btnClearAll.addEventListener('click', () => {
-        if (currentSource === 'merged-data' || currentSource === 'dashboard-data') {
-            showStatus('合并视图不支持直接清空数据，请前往各个平台分别清空。', 'warning');
-            return;
-        }
+        const confirmMsg = '⚠️ 警告：您确定要清除所有平台保存的抓取数据吗？\n\n' +
+            '此操作将一次性清除：\n' +
+            '1. 所有平台（Boss直聘、智联招聘、前程无忧、猎聘）从职位列表页面抓取的数据；\n' +
+            '2. 所有平台从职位详情页抓取的数据（含详情影子库与增强缓存）；\n' +
+            '3. 所有平台从公司页面抓取的数据。\n\n' +
+            '（注：您的个人设置、AI 配置、收藏与黑名单等数据将得到保留）\n\n' +
+            '此操作不可逆，是否确认清除？';
 
-        if (confirm('警告：您确定要清空当前列表的所有数据吗？此操作不可逆！')) {
-            allData = [];
-            let storageKeys = ['boss_scraped_v2'];
-            if (currentSource === '51job-data') storageKeys = ['51job_scraped_v2'];
-            if (currentSource === 'liepin-data') storageKeys = ['liepin_scraped_data_v1'];
-            if (currentSource === 'zhilian-data') storageKeys = ['zhilian_scraped_data_v1', 'zhilian_scraped_data_v2'];
+        if (confirm(confirmMsg)) {
+            const allPlatformStorageKeys = [
+                // 1. 职位列表页面抓取的数据
+                'boss_scraped_v2',
+                '51job_scraped_v2',
+                'liepin_scraped_data_v1',
+                'zhilian_scraped_v2',
+                'zhilian_scraped_data_v2',
+                'zhilian_scraped_data_v1',
+                // 2. 职位详情页面抓取的数据
+                'boss_single_details',
+                '51job_single_details',
+                'liepin_single_details',
+                'zhilian_single_details',
+                'zhilian_enrichment_cache',
+                // 3. 公司页面抓取的数据
+                'boss_companies_scraped',
+                'boss_company_details',
+                '51job_companies_scraped',
+                'liepin_companies_db_v1',
+                'liepin_company_details',
+                'zhilian_company_cache',
+                // 4. 抓取任务运行时状态残留
+                'liepin_auto_resume_v1',
+                'isZhilianScraping',
+                'is51jobScraping'
+            ];
 
-            chrome.storage.local.remove(storageKeys, (err) => {
+            chrome.storage.local.remove(allPlatformStorageKeys, (err) => {
                 if (err) {
                     showStatus('清理失败：数据库处于锁定状态，请点击上方提示重载扩展', 'error');
                     return;
                 }
-                showStatus('数据已成功清空', 'success');
-                renderCards(allData);
+                allData = [];
+                window.zhilianEnrichmentCache = {};
+                showStatus('所有平台保存的职位列表、详情及公司数据已成功清除！', 'success');
+                loadData();
             });
         }
     });
