@@ -402,21 +402,32 @@
             const cId = row['公司ID'];
             const cFullName = row['公司全称'] || row['公司名称'];
 
+            let currentCompData = null;
             if (cId || cFullName) {
                 const compData = {
                     compId: cId || '',
+                    '公司ID': cId || '',
                     compName: row['公司名称'] || '',
+                    '公司名称': row['公司名称'] || '',
                     compFullName: cFullName || '',
+                    '公司全称': cFullName || '',
                     compIndustry: row['公司行业'] || '',
+                    '公司行业': row['公司行业'] || '',
                     compScale: row['公司规模'] || '',
+                    '公司规模': row['公司规模'] || '',
                     compType: row['企业类型'] || '',
+                    '企业类型': row['企业类型'] || '',
                     compAddress: row['详细完整地址'] || '',
+                    '详细完整地址': row['详细完整地址'] || '',
                     platform: 'liepin',
-                    dataSource: 'liepin_companies_db_v1',
                     '平台': 'liepin',
-                    '数据来源': 'liepin_companies_db_v1',
+                    sourcePlatform: '猎聘',
+                    dataSource: 'liepin_single_details_company_card',
+                    '数据来源': 'liepin_single_details_company_card',
+                    '抓取时间': row['抓取时间'] || new Date().toLocaleString(),
                     updateTime: new Date().toLocaleString()
                 };
+                currentCompData = compData;
                 const cIdx = compList.findIndex(c => (cId && String(c.compId) === String(cId)) || (!cId && (c.compFullName === cFullName || c.compName === cFullName)));
                 if (cIdx >= 0) {
                     compList[cIdx] = { ...compList[cIdx], ...compData };
@@ -458,11 +469,15 @@
                 console.log(`[Liepin Scraper] 职位详情已保存到 liepin_single_details: ${row['职位名称']} (${jobId})`);
             });
 
-            // 同步职位详情到本地服务器 (若存在，服务端 job-details 接口会自动联动更新 Company 表并写入 rawData3)
+            // 同步职位详情到本地服务器（同时挂载独立的纯净企业卡片数据 companyCard，供服务端写入 Company.rawData3）
+            const rowToSync = {
+                ...row,
+                companyCard: currentCompData
+            };
             fetch('http://localhost:3000/api/job-details', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify([row])
+                body: JSON.stringify([rowToSync])
             }).catch(err => {
                 console.log('[Liepin Scraper] Local server single detail sync failed (expected if not running):', err);
             });

@@ -2,6 +2,8 @@ let zhilianActiveTabId = null;
 let zhilianCallerTabId = null;
 let job51ActiveTabId = null;
 let job51CallerTabId = null;
+let liepinActiveTabId = null;
+let liepinCallerTabId = null;
 
 if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((error) => console.error(error));
@@ -434,9 +436,6 @@ ${resume || '未提供简历'}`;
     sendResponse({ success: true });
     return false;
   }
-
-let liepinActiveTabId = null;
-let liepinCallerTabId = null;
 
 // ----------- 猎聘网：真实后台标签页架构 -----------
   if (request.action === 'LIEPIN_OPEN_TAB') {

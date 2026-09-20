@@ -248,6 +248,7 @@
                     const cFullName = row['公司全称'] || row['公司名称'];
                     let newlyAddedComp = null;
 
+                    let currentCompData = null;
                     if (cId || cFullName) {
                         const compData = {
                             '公司ID': cId || '',
@@ -265,10 +266,13 @@
                             '企业资质标签': row['企业资质标签'] || '',
                             '平台': '51job',
                             'platform': '51job',
-                            '数据来源': '51job_companies_scraped',
-                            'dataSource': '51job_companies_scraped',
-                            '更新时间': new Date().toLocaleString()
+                            'sourcePlatform': '51job',
+                            '数据来源': '51job_single_details_company_card',
+                            'dataSource': '51job_single_details_company_card',
+                            '更新时间': new Date().toLocaleString(),
+                            '抓取时间': row['抓取时间'] || new Date().toLocaleString()
                         };
+                        currentCompData = compData;
 
                         const cIdx = compList.findIndex(c => {
                             const cidMatch = cId && (String(c['公司ID']) === String(cId) || (c.coinfo && String(c.coinfo.coid || c.coinfo.ctmId) === String(cId)));
@@ -302,11 +306,15 @@
                     }
                     console.log(`[51job Detail] 职位详情已成功抓取: ${row['职位名称']} (${jobId})`);
 
-                    // 尝试推送职位详情到本地服务器（服务端 job-details 接口会自动联动更新 Company 表并写入 rawData3）
+                    // 尝试推送职位详情到本地服务器（同时挂载独立的纯净企业卡片数据 companyCard，供服务端写入 Company.rawData3）
+                    const rowToSync = {
+                        ...row,
+                        companyCard: currentCompData
+                    };
                     fetch('http://localhost:3000/api/job-details', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify([row])
+                        body: JSON.stringify([rowToSync])
                     }).catch(() => {});
                 });
 

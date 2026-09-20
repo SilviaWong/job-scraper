@@ -96,25 +96,8 @@
         return result;
     }
 
-    function extractJsonLdData() {
-        try {
-            const ldScripts = document.querySelectorAll('script[type="application/ld+json"]');
-            for (let s of ldScripts) {
-                const text = s.innerHTML.trim();
-                if (text) {
-                    const json = JSON.parse(text.replace(/[\r\n\t]+/g, ' '));
-                    if (json && (json['@context'] || json.title)) {
-                        return json;
-                    }
-                }
-            }
-        } catch (e) {}
-        return null;
-    }
-
     function extractCompanyData() {
         const inlineData = extractInlineScriptData();
-        const jsonLd = extractJsonLdData();
 
         // 1. 公司ID (brandId / companyId)
         let companyId = inlineData.brandId || '';
@@ -158,16 +141,25 @@
                 if (codeMatch) industryCode = codeMatch[1];
             }
 
-            const rawText = primaryP.innerText || '';
-            const parts = rawText.split(/[\n·\s]+/).map(cleanStr).filter(Boolean);
-            parts.forEach(part => {
-                if (part === industry) return;
-                if (/(\d+(?:-\d+)?人|\d+人以上|少于\d+人)/.test(part)) {
-                    scale = part;
-                } else if (/^(未融资|天使轮|种子轮|A轮|A\+轮|B轮|B\+轮|C轮|C\+轮|D轮|D\+轮|D轮及以上|已上市|战略融资|战略投资|上市公司|不需要融资|不需要)$/i.test(part)) {
-                    stage = part;
-                }
+            // 克隆节点并在内联标签 (em/a/span) 前后插入空格，避免文本无缝粘连（如 "已上市10000人以上"）
+            const cloneP = primaryP.cloneNode(true);
+            cloneP.querySelectorAll('em, a, span').forEach(el => {
+                el.insertAdjacentText('beforebegin', ' ');
+                el.insertAdjacentText('afterend', ' ');
             });
+            const rawText = cloneP.textContent || '';
+
+            // 融资阶段精准匹配
+            const stageMatch = rawText.match(/(未融资|天使轮|种子轮|A轮(?:\+)?|B轮(?:\+)?|C轮(?:\+)?|D轮(?:\+)?|D轮及以上|已上市|战略融资|战略投资|上市公司|不需要融资|不需要)/i);
+            if (stageMatch) {
+                stage = stageMatch[1];
+            }
+
+            // 规模精准匹配 (例: "10000人以上", "100-499人", "少于15人")
+            const scaleMatch = rawText.match(/(\d+(?:-\d+)?人|\d+人以上|少于\d+人)/);
+            if (scaleMatch) {
+                scale = scaleMatch[1];
+            }
         }
 
         // 4. 企业官方标签 / 荣誉资质
@@ -296,75 +288,11 @@
             }
         });
 
-        // 12. 相册与视频宣传片
-        const mediaItems = [];
-        document.querySelectorAll('.company-photo-list .swiper-slide').forEach(slide => {
-            const type = slide.getAttribute('data-type') || 'image';
-            const poster = slide.getAttribute('data-poster') || slide.querySelector('img')?.src || '';
-            const videoId = slide.getAttribute('data-brandvideoid') || '';
-            const label = slide.getAttribute('data-label') || '';
-
-            if (poster || videoId) {
-                mediaItems.push({
-                    type: type,
-                    poster: poster,
-                    videoId: videoId,
-                    label: label
-                });
-            }
-        });
-
-        // 13. 在线招聘 Boss 矩阵
-        const recruiters = [];
-        document.querySelectorAll('.company-sider .recruiter-list ul li').forEach(li => {
-            const bName = cleanStr(li.querySelector('.text .name')?.childNodes[0]?.textContent);
-            const bTitle = cleanStr(li.querySelector('.text .name span:last-of-type')?.textContent);
-            const bDesc = cleanStr(li.querySelector('p.gray')?.textContent);
-            const bAvatar = li.querySelector('.figure img')?.src || '';
-            const bLink = li.querySelector('a')?.getAttribute('href') || '';
-
-            if (bName || bTitle) {
-                recruiters.push({
-                    name: bName,
-                    title: bTitle,
-                    hiringDesc: bDesc,
-                    avatar: bAvatar,
-                    link: bLink
-                });
-            }
-        });
-
-        // 14. 页面热招职位预览
-        const hotJobs = [];
-        document.querySelectorAll('.company-hotjob ul li').forEach(li => {
-            const jid = li.querySelector('a')?.getAttribute('data-jid') || '';
-            const jTitle = cleanStr(li.querySelector('.name b')?.textContent);
-            const salary = cleanStr(li.querySelector('.name .salary')?.textContent);
-            const tags = Array.from(li.querySelectorAll('.tag-list-item')).map(el => cleanStr(el.textContent));
-            const locationCity = cleanStr(li.querySelector('.company-location')?.textContent);
-            const jobSkills = Array.from(li.querySelectorAll('.detail-bottom-label')).map(el => cleanStr(el.textContent));
-            const jdText = cleanMultiLineStr(li.querySelector('.detail-bottom-text')?.innerText);
-
-            if (jTitle || jid) {
-                hotJobs.push({
-                    jobId: jid,
-                    jobTitle: jTitle,
-                    salary: salary,
-                    tags: tags,
-                    city: locationCity,
-                    skills: jobSkills,
-                    description: jdText
-                });
-            }
-        });
-
-        // 15. 元数据与更新时间
+        // 12. 页面来源与更新时间
         const updateTimeText = cleanStr(document.querySelector('.update-time')?.textContent);
-        const metaLrDateTime = document.querySelector('meta[property="bytedance:lrDate_time"]')?.content || '';
-        const metaUpdatedTime = document.querySelector('meta[property="bytedance:updated_time"]')?.content || '';
         const canonicalUrl = document.querySelector('link[rel="canonical"]')?.getAttribute('href') || location.href;
 
-        // 组装最终全景数据对象
+        // 组装最终全景数据对象（精简掉 mediaItems、recruiters、hotJobs 等冗余大字段）
         const companyPayload = {
             // 基础通用规范
             platform: 'boss',
@@ -427,19 +355,10 @@
             '注册地址': businessInfo['注册地址'] || '',
             '经营范围': businessInfo['经营范围'] || '',
 
-            // 媒体与团队
-            mediaItems: mediaItems,
-            recruiters: recruiters,
-            hotJobs: hotJobs,
-
             // 页面来源与时间
             updateTime: updateTimeText,
-            metaLrDateTime: metaLrDateTime,
-            metaUpdatedTime: metaUpdatedTime,
-            jsonLd: jsonLd,
             url: canonicalUrl,
-            scrapedAt: new Date().toLocaleString(),
-            isoScrapedAt: new Date().toISOString()
+            scrapedAt: new Date().toLocaleString()
         };
 
         return companyPayload;

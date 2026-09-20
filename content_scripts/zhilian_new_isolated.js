@@ -597,6 +597,7 @@
                 }
 
                 // 3. 保存公司详情到影子库
+                let currentCompData = null;
                 const compNumber = row['公司ID'] || (initialState?.jobDetail?.detailedCompany?.companyNumber) || '';
                 if (compNumber) {
                     const existingComp = companyCache[compNumber] || {};
@@ -604,16 +605,32 @@
                         ...existingComp,
                         ...(initialState?.companyExtDetail || {}),
                         companyNumber: compNumber,
+                        '公司ID': compNumber,
                         companyName: row['公司全称'] || row['公司名称'],
+                        '公司名称': row['公司名称'] || '',
+                        '公司全称': row['公司全称'] || row['公司名称'] || '',
                         legalPerson: row['法定代表人'] || existingComp.legalPerson || '',
+                        '法定代表人': row['法定代表人'] || existingComp.legalPerson || '',
                         epType: row['企业类型'] || existingComp.epType || '',
+                        '企业类型': row['企业类型'] || existingComp.epType || '',
                         createDate: row['成立日期'] || existingComp.createDate || '',
+                        '成立日期': row['成立日期'] || existingComp.createDate || '',
                         epStatus: row['经营状态'] || existingComp.epStatus || '',
+                        '经营状态': row['经营状态'] || existingComp.epStatus || '',
                         registeredCapital: row['注册资金'] || existingComp.registeredCapital || '',
+                        '注册资金': row['注册资金'] || existingComp.registeredCapital || '',
                         epCertNo: row['统一社会信用代码'] || existingComp.epCertNo || '',
+                        '统一社会信用代码': row['统一社会信用代码'] || existingComp.epCertNo || '',
+                        platform: 'zhilian',
+                        '平台': 'zhilian',
+                        sourcePlatform: '智联',
+                        dataSource: 'zhilian_single_details_company_card',
+                        '数据来源': 'zhilian_single_details_company_card',
+                        '抓取时间': row['抓取时间'] || new Date().toLocaleString(),
                         url: row['职位链接'] || existingComp.url || ''
                     };
                     companyCache[compNumber] = compDetailObj;
+                    currentCompData = compDetailObj;
                     companyCacheUpdated = true;
                 }
 
@@ -627,11 +644,15 @@
                     showToast(`✅ 智联职位【${row['职位名称'] || jobId}】已成功解析并保存！`);
                     console.log(`[Zhilian Scraper] 职位详情已保存到 zhilian_single_details:`, row);
 
-                    // 同步职位详情到本地服务器
+                    // 同步职位详情到本地服务器（同时挂载独立的纯净企业卡片数据 companyCard，供服务端写入 Company.rawData3）
+                    const rowToSync = {
+                        ...row,
+                        companyCard: currentCompData
+                    };
                     fetch('http://localhost:3000/api/job-details', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify([row])
+                        body: JSON.stringify([rowToSync])
                     }).catch(err => {
                         console.log('[Zhilian Scraper] Local server job detail sync failed:', err);
                     });

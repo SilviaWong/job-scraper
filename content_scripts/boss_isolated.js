@@ -380,8 +380,12 @@
                         '公司规模': row['公司规模'] || '',
                         '公司福利': row['公司福利'] || '',
                         '详细完整地址': row['详细完整地址'] || '',
-                        'sourcePlatform': 'Boss直聘',
+                        '平台': 'boss',
                         'platform': 'boss',
+                        'sourcePlatform': 'Boss直聘',
+                        '数据来源': 'boss_single_details_company_card',
+                        'dataSource': 'boss_single_details_company_card',
+                        '抓取时间': row['抓取时间'] || new Date().toLocaleString(),
                         '更新时间': new Date().toLocaleString()
                     };
                     currentCompData = compData;
@@ -401,23 +405,16 @@
                     showToast('✅ 职位详情已自动抓取，关键数据已同步至主库！');
                 });
 
-                // 推送到本地服务器进行测试
-                // if (mainIdx >= 0) {
-                //     const jobToSync = { ...mainList[mainIdx], boss_single_detail: row };
-                //     fetch('http://localhost:3000/api/jobs', {
-                //         method: 'POST',
-                //         headers: { 'Content-Type': 'application/json' },
-                //         body: JSON.stringify([jobToSync])
-                //     }).catch(err => {
-                //         console.log('[Boss Scraper] Local server sync failed:', err);
-                //     });
-                // }
+                // 单独推送职位详情数据 到本地服务（同时挂载独立的纯净企业卡片数据 companyCard，供服务端写入 Company.rawData3）
+                const rowToSync = {
+                    ...row,
+                    companyCard: currentCompData
+                };
 
-                // 单独推送职位详情数据 到本地服务（服务端 job-details 接口会自动联动更新 Company 表并写入 rawData3）
                 fetch('http://localhost:3000/api/job-details', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify([row])
+                    body: JSON.stringify([rowToSync])
                 }).catch(err => {
                     console.log('[Boss Scraper] Local server single detail sync failed:', err);
                 });
