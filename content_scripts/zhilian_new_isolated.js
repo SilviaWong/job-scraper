@@ -987,12 +987,14 @@
             scrapeSinglePage();
 
             if (location.href.includes('auto_close=1')) {
+                const match = location.href.match(/[?&]close_delay=(\d+)/);
+                const closeDelay = match ? parseInt(match[1], 10) : (Math.floor(Math.random() * (4500 - 2000 + 1)) + 2000);
                 setTimeout(() => {
                     window.close();
                     try {
                         chrome.runtime.sendMessage({ action: 'close_current_tab' });
                     } catch (e) { }
-                }, 5000);
+                }, closeDelay);
             }
         }, 1500);
     }

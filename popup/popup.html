@@ -29,7 +29,10 @@
         <div class="settings" style="margin-top: 8px;">
             <label><input type="checkbox" id="unified-auto-scroll" checked> 自动往下翻页/下拉加载</label>
             <div style="margin-top: 4px;">
-                <label><input type="checkbox" id="unified-skip-scraped" checked> 跳过已抓取的职位</label>
+                <label><input type="checkbox" id="unified-skip-scraped" checked> 跳过已抓取/黑名单职位</label>
+            </div>
+            <div id="boss-list-only-container" style="margin-top: 4px; display: none;">
+                <label title="仅保存列表接口返回的薪资、经验、学历、技能、公司、HR等丰富字段，不点击卡片请求JD详情，几乎零风控"><input type="checkbox" id="boss-list-only"> 🛡️ 仅抓列表基础数据 (零点击防风控)</label>
             </div>
             <div id="open-mode-container" style="margin-top: 8px; font-size: 13px; color: #555;">
                 <label id="open-mode-label" for="unified-open-mode">51job / 猎聘详情打开方式：</label>

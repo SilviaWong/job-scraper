@@ -4,6 +4,15 @@ let job51ActiveTabId = null;
 let job51CallerTabId = null;
 let liepinActiveTabId = null;
 let liepinCallerTabId = null;
+const bossAutoCloseTabs = new Map();
+const job51AutoCloseTabs = new Map();
+
+if (chrome.tabs && chrome.tabs.onRemoved) {
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    bossAutoCloseTabs.delete(tabId);
+    job51AutoCloseTabs.delete(tabId);
+  });
+}
 
 if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((error) => console.error(error));
@@ -26,16 +35,52 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // 保持异步
   }
 
-  // ----------- Boss 直聘：后台标签页支持 -----------
+  // ----------- Boss 直聘：后台标签页支持（剥离 URL 中的 auto_close 参数防风控） -----------
   if (request.action === 'BOSS_OPEN_TAB') {
-    chrome.tabs.create({ url: request.url, active: false }, (tab) => {
+    let targetUrl = request.url || '';
+    let shouldAutoClose = false;
+    let closeDelay = Number(request.closeDelay) || 0;
+
+    try {
+      const urlObj = new URL(targetUrl);
+      if (urlObj.searchParams.get('auto_close') === '1' || request.closeDelay) {
+        shouldAutoClose = true;
+      }
+      const urlDelay = parseInt(urlObj.searchParams.get('close_delay'), 10);
+      if (!closeDelay && !isNaN(urlDelay) && urlDelay > 0) {
+        closeDelay = urlDelay;
+      }
+      urlObj.searchParams.delete('auto_close');
+      urlObj.searchParams.delete('close_delay');
+      targetUrl = urlObj.toString();
+    } catch (e) {}
+
+    chrome.tabs.create({ url: targetUrl, active: false }, (tab) => {
       if (chrome.runtime.lastError || !tab) {
         sendResponse({ success: false });
         return;
       }
+      if (shouldAutoClose) {
+        const finalDelay = closeDelay > 0
+          ? closeDelay
+          : (Math.floor(Math.random() * (5000 - 2500 + 1)) + 2500);
+        bossAutoCloseTabs.set(tab.id, finalDelay);
+      }
       sendResponse({ success: true, tabId: tab.id });
     });
     return true;
+  }
+
+  if (request.action === 'check_boss_auto_close') {
+    const tabId = sender.tab ? sender.tab.id : null;
+    if (tabId && bossAutoCloseTabs.has(tabId)) {
+      const closeDelay = bossAutoCloseTabs.get(tabId);
+      bossAutoCloseTabs.delete(tabId);
+      sendResponse({ autoClose: true, closeDelay });
+    } else {
+      sendResponse({ autoClose: false });
+    }
+    return false;
   }
 
   if (request.action === 'close_current_tab') {
@@ -475,19 +520,55 @@ ${resume || '未提供简历'}`;
     return false;
   }
 
-  // ----------- 51job：真实后台标签页架构 -----------
+  // ----------- 51job：真实后台标签页架构（剥离 URL 自动化参数防风控） -----------
   if (request.action === '51JOB_OPEN_TAB') {
     job51CallerTabId = sender.tab ? sender.tab.id : null;
-    chrome.tabs.create({ url: request.url, active: false }, (tab) => {
+    let targetUrl = request.url || '';
+    let shouldAutoClose = false;
+    let closeDelay = Number(request.closeDelay) || 0;
+
+    try {
+      const urlObj = new URL(targetUrl);
+      if (urlObj.searchParams.get('auto_close') === '1' || request.closeDelay) {
+        shouldAutoClose = true;
+      }
+      const urlDelay = parseInt(urlObj.searchParams.get('close_delay'), 10);
+      if (!closeDelay && !isNaN(urlDelay) && urlDelay > 0) {
+        closeDelay = urlDelay;
+      }
+      urlObj.searchParams.delete('auto_close');
+      urlObj.searchParams.delete('close_delay');
+      targetUrl = urlObj.toString();
+    } catch (e) {}
+
+    chrome.tabs.create({ url: targetUrl, active: false }, (tab) => {
       if (chrome.runtime.lastError || !tab) {
         console.error("无法创建标签页:", chrome.runtime.lastError);
         sendResponse({ success: false });
         return;
       }
       job51ActiveTabId = tab.id;
+      if (shouldAutoClose) {
+        const finalDelay = closeDelay > 0
+          ? closeDelay
+          : (Math.floor(Math.random() * (4500 - 2200 + 1)) + 2200);
+        job51AutoCloseTabs.set(tab.id, finalDelay);
+      }
       sendResponse({ success: true, tabId: tab.id });
     });
     return true;
+  }
+
+  if (request.action === 'check_51job_auto_close') {
+    const tabId = sender.tab ? sender.tab.id : null;
+    if (tabId && job51AutoCloseTabs.has(tabId)) {
+      const closeDelay = job51AutoCloseTabs.get(tabId);
+      job51AutoCloseTabs.delete(tabId);
+      sendResponse({ autoClose: true, closeDelay });
+    } else {
+      sendResponse({ autoClose: false });
+    }
+    return false;
   }
 
   if (request.action === '51JOB_DATA_EXTRACTED') {

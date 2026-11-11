@@ -108,6 +108,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const openModeContainer = document.getElementById('open-mode-container');
         const openModeLabel = document.getElementById('open-mode-label');
         const openModeSelect = document.getElementById('unified-open-mode');
+        const bossListOnlyContainer = document.getElementById('boss-list-only-container');
         const settingsSection = document.querySelector('.settings');
 
         const chatScanSection = document.getElementById('chat-scan-section');
@@ -160,8 +161,12 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 if (openModeContainer) openModeContainer.style.display = 'none';
             }
+            if (bossListOnlyContainer) {
+                bossListOnlyContainer.style.display = ((platform === 'boss' || platform === '51job') && !isCompanyPage) ? 'block' : 'none';
+            }
         } else {
             if (openModeContainer) openModeContainer.style.display = 'none';
+            if (bossListOnlyContainer) bossListOnlyContainer.style.display = 'none';
         }
 
         // Load count
@@ -265,12 +270,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const openModeSelect = document.getElementById('unified-open-mode');
         const openMode = openModeSelect ? openModeSelect.value : 'iframe';
         const skipScrapedCheck = document.getElementById('unified-skip-scraped');
+        const bossListOnlyCheck = document.getElementById('boss-list-only');
         
         chrome.tabs.sendMessage(currentTabId, {
             action: targetAction,
             autoScroll: checkAutoScroll ? checkAutoScroll.checked : true,
             openMode: openMode,
-            skipScraped: skipScrapedCheck ? skipScrapedCheck.checked : true
+            skipScraped: skipScrapedCheck ? skipScrapedCheck.checked : true,
+            listOnly: bossListOnlyCheck ? bossListOnlyCheck.checked : false
         }).catch(() => {
             alert('无法连接到网页插件，请先刷新网页 (F5) 后再试！');
             btnStartUnified.disabled = false;

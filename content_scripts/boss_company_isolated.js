@@ -546,18 +546,51 @@
                 clearInterval(timer);
                 lastUrl = currentUrl;
 
-                // 稍微延迟 400ms 确保 swiper 相册和地图经纬度挂载完毕
+                // 随机延迟 500~950ms 确保 swiper 相册和地图经纬度挂载完毕
+                const settleDelay = Math.floor(Math.random() * 450) + 500;
                 setTimeout(() => {
                     try {
+                        if (
+                            location.href.includes('verify-slider') ||
+                            document.querySelector('#zp-verify-slider, .dialog-account-safe, .verify-slider-container')
+                        ) {
+                            showToast('🚨 检测到安全验证，暂停自动抓取企业数据', false);
+                            return;
+                        }
                         const data = extractCompanyData();
                         saveAndSyncCompany(data);
                         injectFloatingButton();
+
+                        // 兼容无痕自动关闭标签页（若由后台批量任务打开）
+                        let storedDelay = null;
+                        try {
+                            storedDelay = sessionStorage.getItem('__zp_ac_delay__');
+                            if (storedDelay) sessionStorage.removeItem('__zp_ac_delay__');
+                        } catch (e) {}
+                        if (storedDelay) {
+                            setTimeout(() => {
+                                window.close();
+                                try { chrome.runtime.sendMessage({ action: 'close_current_tab' }).catch(() => {}); } catch (e) {}
+                            }, parseInt(storedDelay, 10) || 2800);
+                        } else if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+                            try {
+                                chrome.runtime.sendMessage({ action: 'check_boss_auto_close' }, (resp) => {
+                                    if (chrome.runtime.lastError) return;
+                                    if (resp && resp.autoClose) {
+                                        setTimeout(() => {
+                                            window.close();
+                                            try { chrome.runtime.sendMessage({ action: 'close_current_tab' }).catch(() => {}); } catch (e) {}
+                                        }, resp.closeDelay || 2800);
+                                    }
+                                });
+                            } catch (e) {}
+                        }
                     } catch (e) {
                         console.error('[Boss Company Scraper] 自动提取报错:', e);
                     } finally {
                         isExtracting = false;
                     }
-                }, 400);
+                }, settleDelay);
             } else if (retries >= maxRetries) {
                 clearInterval(timer);
                 isExtracting = false;

@@ -549,13 +549,15 @@
 
                     // 兼容通过外部自动化脚本调用并传递 auto_close=1 的场景 (参考 Boss 直聘)
                     if (location.href.includes('auto_close=1')) {
-                        console.log("[Liepin Single Detail] 检测到 auto_close=1，5秒后自动关闭当前标签页...");
+                        const match = location.href.match(/[?&]close_delay=(\d+)/);
+                        const closeDelay = match ? parseInt(match[1], 10) : (Math.floor(Math.random() * (4500 - 2000 + 1)) + 2000);
+                        console.log(`[Liepin Single Detail] 检测到 auto_close=1，${closeDelay}ms 后自动关闭当前标签页...`);
                         setTimeout(() => {
                             window.close();
                             try {
                                 chrome.runtime.sendMessage({ action: 'close_current_tab' });
                             } catch (e) { }
-                        }, 5000);
+                        }, closeDelay);
                     }
                 } catch (err) {
                     console.error("[Liepin Single Detail] 抓取职位详情报错:", err);

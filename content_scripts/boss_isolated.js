@@ -5,20 +5,46 @@
 
     let isRunning = false;
     let isAutoScroll = true;
+    let isSkipScraped = true;
+    let isListOnlyMode = false;
     let currentList = [];
     let currentIndex = 0;
     let scrapedData = [];
     let scrapedIds = new Set();
+    let blacklistedCompanies = new Set();
     let sessionProcessedIds = new Set(); // Track jobs processed in current run to prevent infinite loops
     let interceptedListJobs = new Map();
     let interceptedDetailJobs = new Map(); // Store intercepted list JSON items
     let waitTimer = null;
+    let scrollPollTimer = null;
+    let restCountdownTimer = null;
+    let currentStepToken = 0;
+    let isWaitingForDetail = false;
+    let currentProcessingJobId = null;
     let jobsScrapedSinceRest = 0;
-    let nextRestLimit = getRandomInt(8, 12);
+    let nextRestLimit = getRandomInt(8, 14);
+    let sessionDetailClickCount = 0;
+    let nextDeepCooldownLimit = getRandomInt(50, 65); // 每连续点击 50~65 条触发一次深度冷却并自动续抓
     let scrollSessionInterceptedCount = 0;
     let scrollSessionHasNewJobs = false;
     let lastJobListHasMore = null;
     let lastJobListInterceptedTime = 0;
+
+    function clearAllTimers() {
+        if (waitTimer) {
+            clearTimeout(waitTimer);
+            waitTimer = null;
+        }
+        if (scrollPollTimer) {
+            clearTimeout(scrollPollTimer);
+            clearInterval(scrollPollTimer);
+            scrollPollTimer = null;
+        }
+        if (restCountdownTimer) {
+            clearInterval(restCountdownTimer);
+            restCountdownTimer = null;
+        }
+    }
 
     function getRandomInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 
@@ -34,10 +60,75 @@
         return String(str).replace(/"/g, '""').trim();
     }
 
+    function extractJobIdFromRow(d) {
+        if (!d || typeof d !== 'object') return '';
+        return cleanStr(
+            d.jobId ||
+            d['职位ID'] ||
+            d.encryptJobId ||
+            (d.zpData && d.zpData.jobInfo && d.zpData.jobInfo.encryptId) ||
+            (d.jobInfo && d.jobInfo.encryptId) ||
+            (d.jobDetail && d.jobDetail.zpData && d.jobDetail.zpData.jobInfo && d.jobDetail.zpData.jobInfo.encryptId)
+        );
+    }
+
+    function normalizeCompanyNameForMatch(name) {
+        return cleanStr(name).replace(/[·.()\uff08\uff09\s]/g, '').toLowerCase();
+    }
+
+    function isCompanyBlacklisted(companyName) {
+        if (!companyName || blacklistedCompanies.size === 0) return false;
+        const raw = cleanStr(companyName);
+        const norm = normalizeCompanyNameForMatch(raw);
+        if (!norm) return false;
+        if (blacklistedCompanies.has(raw) || blacklistedCompanies.has(norm)) return true;
+        for (const blk of blacklistedCompanies) {
+            if (blk.length >= 2 && (norm === blk || norm.includes(blk) || blk.includes(norm))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     function loadCache(callback) {
-        chrome.storage.local.get(['boss_scraped_v2'], (res) => {
+        chrome.storage.local.get(['boss_scraped_v2', 'boss_single_details', 'blacklisted_companies'], (res) => {
             scrapedData = Array.isArray(res.boss_scraped_v2) ? res.boss_scraped_v2 : [];
-            scrapedIds = new Set(scrapedData.map(d => d['职位ID']).filter(Boolean));
+            const idSet = new Set();
+            scrapedData.forEach(d => {
+                const id = extractJobIdFromRow(d);
+                if (id) idSet.add(id);
+            });
+            if (Array.isArray(res.boss_single_details)) {
+                res.boss_single_details.forEach(d => {
+                    const id = extractJobIdFromRow(d);
+                    if (id) idSet.add(id);
+                });
+            }
+            scrapedIds = idSet;
+
+            const blkSet = new Set();
+            if (Array.isArray(res.blacklisted_companies)) {
+                res.blacklisted_companies.forEach(c => {
+                    const name = typeof c === 'string' ? c : (c && c.companyName ? c.companyName : '');
+                    const n = normalizeCompanyNameForMatch(name);
+                    if (n) blkSet.add(n);
+                });
+            }
+            blacklistedCompanies = blkSet;
+
+            // 尝试静默合并本地看板服务的黑名单（不阻塞主流程）
+            fetch('http://localhost:3000/api/blacklist')
+                .then(r => r.json())
+                .then(data => {
+                    const list = Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : (Array.isArray(data?.companies) ? data.companies : []));
+                    list.forEach(item => {
+                        const name = typeof item === 'string' ? item : (item?.companyName || item?.name || '');
+                        const n = normalizeCompanyNameForMatch(name);
+                        if (n) blacklistedCompanies.add(n);
+                    });
+                })
+                .catch(() => {});
+
             if (callback) callback();
         });
     }
@@ -66,48 +157,102 @@
                 // 如果本地服务器未开启，这里会忽略错误，不影响原有逻辑
                 console.log('[Boss Scraper] Local server sync failed (expected if not running):', err);
             });
-
-            // https://job-dashboard-bgr.pages.dev
-            // 远程的先不同步数据了，但是代码保留可以
-            // fetch('https://job-dashboard-bgr.pages.dev/api/jobs', {
-            //     method: 'POST',
-            //     headers: { 'Content-Type': 'application/json' },
-            //     body: JSON.stringify([newRow])
-            // }).catch(err => {
-            //     // 如果本地服务器未开启，这里会忽略错误，不影响原有逻辑
-            //     console.log('[Boss Scraper] Remote server sync failed (expected if not running):', err);
-            // });
         }
     }
 
     function notifyPopupStatus(statusText) {
-        chrome.runtime.sendMessage({
-            action: 'boss_update_status',
-            isRunning,
-            status: statusText
-        });
+        try {
+            chrome.runtime.sendMessage({
+                action: 'boss_update_status',
+                isRunning,
+                status: statusText
+            }).catch(() => {});
+        } catch (e) {}
     }
 
     function notifyPopupCount() {
-        chrome.runtime.sendMessage({
-            action: 'boss_update_count',
-            count: scrapedData.length
-        });
+        try {
+            chrome.runtime.sendMessage({
+                action: 'boss_update_count',
+                count: scrapedData.length
+            }).catch(() => {});
+        } catch (e) {}
+    }
+
+    // ==========================================
+    // 风控/验证码检测与紧急熔断机制
+    // ==========================================
+    function detectRiskControlDOM() {
+        const href = location.href || '';
+        if (
+            href.includes('/web/user/safe/verify-slider') ||
+            href.includes('security-check') ||
+            href.includes('/unsafe')
+        ) {
+            return '当前页面已跳转至安全验证页';
+        }
+
+        const riskSelectors = [
+            '.dialog-account-safe',
+            '#zp-verify-slider',
+            '.verify-slider-container',
+            '.geetest_panel_box',
+            '.geetest_wind',
+            'iframe[src*="verify-slider"]',
+            'iframe[src*="captcha"]'
+        ];
+        for (const sel of riskSelectors) {
+            const el = document.querySelector(sel);
+            if (el && (el.offsetWidth > 0 || el.offsetHeight > 0)) {
+                return '检测到安全验证/滑块弹窗';
+            }
+        }
+
+        const dialogWrap = document.querySelector('.dialog-wrap, .boss-dialog, .zp-dialog');
+        if (dialogWrap && (dialogWrap.offsetWidth > 0 || dialogWrap.offsetHeight > 0)) {
+            const txt = dialogWrap.textContent || '';
+            if (/安全验证|行为验证|访问过于频繁|请完成.*验证|异常访问/.test(txt)) {
+                return '检测到风控验证弹窗';
+            }
+        }
+        return null;
+    }
+
+    function triggerRiskControlCircuitBreaker(reason) {
+        if (!isRunning && !isWaitingForDetail) return;
+        isRunning = false;
+        isWaitingForDetail = false;
+        currentProcessingJobId = null;
+        currentStepToken++;
+        clearAllTimers();
+
+        const msg = `🚨 风控熔断: ${reason || '检测到验证请求'}，已自动暂停！`;
+        console.warn('[Boss Scraper]', msg);
+        notifyPopupStatus(msg);
+        showToast(`${msg} 请手动完成验证并休息几分钟后再继续。`, 8000, '#ef4444');
     }
 
     if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
         chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             if (request.action === 'boss_start') {
                 isAutoScroll = request.autoScroll !== false;
-                // 删除 sessionProcessedIds.clear(); 以便暂停后继续抓取时不会从头开始
+                isSkipScraped = request.skipScraped !== false;
+                isListOnlyMode = request.listOnly === true;
                 if (!isRunning) {
+                    sessionDetailClickCount = 0;
+                    nextDeepCooldownLimit = getRandomInt(50, 65);
+                    jobsScrapedSinceRest = 0;
+                    nextRestLimit = getRandomInt(8, 14);
                     loadCache(() => {
                         startScraping();
                     });
                 }
             } else if (request.action === 'boss_stop') {
                 isRunning = false;
-                clearTimeout(waitTimer);
+                isWaitingForDetail = false;
+                currentProcessingJobId = null;
+                currentStepToken++;
+                clearAllTimers();
                 notifyPopupStatus('已暂停');
             } else if (request.action === 'boss_clear') {
                 scrapedData = [];
@@ -132,10 +277,17 @@
         console.warn("[Boss Scraper] chrome.runtime.onMessage API 不可用");
     }
 
-    window.addEventListener('message', (event) => {
-        if (event.source !== window || !event.data) return;
-        if (event.data.type === 'BOSS_JOB_LIST') {
-            const data = event.data.data;
+    function handleInterceptedEventPayload(payload) {
+        if (!payload || !payload.type) return;
+
+        if (payload.type === 'BOSS_RISK_CONTROL') {
+            const info = payload.data || {};
+            triggerRiskControlCircuitBreaker(info.message || `接口风控码 ${info.code}`);
+            return;
+        }
+
+        if (payload.type === 'BOSS_JOB_LIST') {
+            const data = payload.data;
             const zpData = (data && (data.zpData || data.data)) || {};
             const jobList = zpData.jobList || [];
 
@@ -157,18 +309,34 @@
             if (hasNewInSession) {
                 scrollSessionHasNewJobs = true;
             }
-        } else if (event.data.type === 'BOSS_JOB_DETAIL') {
-            const data = event.data.data;
+        } else if (payload.type === 'BOSS_JOB_DETAIL') {
+            const data = payload.data;
             const jobInfo = data.jobInfo || (data.zpData && data.zpData.jobInfo) || (data.data && data.data.jobInfo) || {};
             const jobId = cleanStr(jobInfo.encryptId);
             if (jobId) {
                 interceptedDetailJobs.set(jobId, data);
             }
 
-            if (isRunning) {
+            // 只有当正在等待当前卡片的详情，且拦截到的 jobId 与当前正在处理的卡片 ID 完全匹配时，才触发下一步
+            if (isRunning && isWaitingForDetail && jobId && jobId === currentProcessingJobId) {
                 onDetailApiCaptured(data);
             }
         }
+    }
+
+    // 监听来自 boss_interceptor.js 的隐蔽 CustomEvent 通道
+    window.addEventListener('__zp_ext_bridge__', (event) => {
+        if (!event || !event.detail) return;
+        try {
+            const payload = typeof event.detail === 'string' ? JSON.parse(event.detail) : event.detail;
+            handleInterceptedEventPayload(payload);
+        } catch (e) {}
+    });
+
+    // 保留对旧版 message 的兼容
+    window.addEventListener('message', (event) => {
+        if (event.source !== window || !event.data || !event.data.type) return;
+        handleInterceptedEventPayload(event.data);
     });
 
     function formatActiveTime(desc) {
@@ -191,7 +359,10 @@
         const dd = String(today.getDate()).padStart(2, '0');
         const todayStr = `${yyyy}-${mm}-${dd}`;
 
-        const existingIndex = scrapedData.findIndex(d => (d.jobId || d['职位ID'] || (d.zpData && d.zpData.jobInfo && d.zpData.jobInfo.encryptId) || (d.jobInfo && d.jobInfo.encryptId)) === jobId);
+        row.jobId = jobId;
+        row['职位ID'] = row['职位ID'] || jobId;
+
+        const existingIndex = scrapedData.findIndex(d => extractJobIdFromRow(d) === jobId);
         if (existingIndex >= 0) {
             // Keep deep fetch data if existing row has it and new row does not
             const oldRow = scrapedData[existingIndex];
@@ -217,22 +388,38 @@
         saveCache(callback, row);
     }
 
-    function onDetailApiCaptured(json) {
+    function completeCurrentJob(jobId, row, logMsg) {
+        if (!isRunning || !isWaitingForDetail) return false;
+        if (currentProcessingJobId && jobId !== currentProcessingJobId) return false;
 
-        clearTimeout(waitTimer);
+        // 立即锁定当前步骤状态，防止后续异步响应（如二次点击 XHR 或超时定时器）重复触发 scheduleNextJob 造成跳卡
+        isWaitingForDetail = false;
+        currentProcessingJobId = null;
+        currentStepToken++;
+        clearAllTimers();
+
+        sessionProcessedIds.add(jobId);
+        upsertData(jobId, row, () => {
+            if (logMsg) {
+                console.log(logMsg);
+            }
+            scheduleNextJob();
+        });
+        return true;
+    }
+
+    function onDetailApiCaptured(json) {
+        if (!isRunning || !isWaitingForDetail) return;
 
         const data = json.zpData || json.data || json;
         if (!data || !data.jobInfo) {
-            console.error('[Boss Scraper] API captured but no jobInfo found:', json);
-            scheduleNextJob();
             return;
         }
 
         const job = data.jobInfo || {};
-        const jobId = cleanStr(job.encryptId);
+        const jobId = cleanStr(job.encryptId) || currentProcessingJobId;
 
-        if (!jobId) {
-            scheduleNextJob();
+        if (!jobId || (currentProcessingJobId && jobId !== currentProcessingJobId)) {
             return;
         }
 
@@ -248,15 +435,18 @@
         }
 
         row.jobId = jobId;
+        row['职位ID'] = jobId;
+        row['职位名称'] = row['职位名称'] || cleanStr(job.jobName) || '';
         row.platform = 'boss';
         row.dataSource = 'boss_scraped_v2';
         row['平台'] = 'boss';
         row['数据来源'] = 'boss_scraped_v2';
 
-        upsertData(jobId, row, () => {
-            console.log(`✅ [已更新 ${scrapedData.length}] ${job.jobName || ''} | ${job.salaryDesc || ''}`);
-            scheduleNextJob();
-        });
+        completeCurrentJob(
+            jobId,
+            row,
+            `✅ [已更新 ${scrapedData.length + (scrapedIds.has(jobId) ? 0 : 1)}] ${job.jobName || ''} | ${job.salaryDesc || ''}`
+        );
     }
 
 
@@ -438,12 +628,12 @@
     }
 
     // 页面提示 Toast
-    function showToast(msg) {
+    function showToast(msg, duration = 3000, bgColor = '#00c2b3') {
         const div = document.createElement('div');
         div.textContent = msg;
         div.style.cssText = `
             position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
-            background: #00c2b3; color: white; padding: 12px 24px;
+            background: ${bgColor}; color: white; padding: 12px 24px;
             border-radius: 8px; z-index: 9999999; font-size: 15px; font-weight: bold; pointer-events: none;
             box-shadow: 0 4px 12px rgba(0,0,0,0.2); transition: opacity 0.5s;
         `;
@@ -451,13 +641,294 @@
         setTimeout(() => {
             div.style.opacity = '0';
             setTimeout(() => div.remove(), 500);
-        }, 3000);
+        }, duration);
+    }
+
+    // 拟人化点击：计算目标元素真实矩形区域内的随机坐标，并拆分移入、按压(mousedown)与抬起(mouseup/click)的时间间隔
+    function simulateRealClick(element, preventLinkNav = false) {
+        if (!element) return;
+        let preventNavHandler = null;
+        if (preventLinkNav) {
+            preventNavHandler = (e) => {
+                e.preventDefault();
+            };
+            window.addEventListener('click', preventNavHandler, true);
+        }
+
+        let clientX = getRandomInt(180, 420);
+        let clientY = getRandomInt(220, 560);
+        try {
+            const rect = element.getBoundingClientRect();
+            if (rect && rect.width > 4 && rect.height > 4) {
+                const offsetX = Math.floor(rect.width * (0.28 + Math.random() * 0.44));
+                const offsetY = Math.floor(rect.height * (0.28 + Math.random() * 0.44));
+                clientX = Math.max(1, Math.round(rect.left + offsetX));
+                clientY = Math.max(1, Math.round(rect.top + offsetY));
+            }
+        } catch (e) {}
+
+        const screenX = Math.round((window.screenX || 0) + clientX);
+        const screenY = Math.round((window.screenY || 0) + clientY + Math.max(0, (window.outerHeight - window.innerHeight)));
+
+        const baseEventInit = {
+            view: window,
+            bubbles: true,
+            cancelable: true,
+            clientX,
+            clientY,
+            screenX,
+            screenY
+        };
+
+        try {
+            ['pointerover', 'mouseover', 'mousemove'].forEach(type => {
+                element.dispatchEvent(new MouseEvent(type, { ...baseEventInit, buttons: 0 }));
+            });
+
+            const downDelay = getRandomInt(18, 45);
+            const pressDuration = getRandomInt(65, 145);
+
+            setTimeout(() => {
+                try {
+                    ['pointerdown', 'mousedown'].forEach(type => {
+                        element.dispatchEvent(new MouseEvent(type, { ...baseEventInit, button: 0, buttons: 1 }));
+                    });
+                } catch (e) {}
+
+                setTimeout(() => {
+                    try {
+                        ['pointerup', 'mouseup', 'click'].forEach(type => {
+                            element.dispatchEvent(new MouseEvent(type, { ...baseEventInit, button: 0, buttons: 0 }));
+                        });
+                    } catch (e) {
+                        try { element.click(); } catch (err) {}
+                    } finally {
+                        if (preventNavHandler) {
+                            setTimeout(() => window.removeEventListener('click', preventNavHandler, true), 50);
+                        }
+                    }
+                }, pressDuration);
+            }, downDelay);
+        } catch (e) {
+            try { element.click(); } catch (err) {}
+            if (preventNavHandler) {
+                setTimeout(() => window.removeEventListener('click', preventNavHandler, true), 50);
+            }
+        }
+    }
+
+    function getDetailBoxSignature() {
+        const detailBox = document.querySelector('.job-detail-box, .job-detail-container');
+        if (!detailBox) return '';
+        const jobName = cleanStr(detailBox.querySelector('.job-name, .job-title')?.textContent);
+        const descNode = detailBox.querySelector('.job-detail-body .desc, .job-sec-text, .job-detail-section .desc');
+        const desc = descNode ? cleanStr(descNode.innerText || descNode.textContent).slice(0, 100) : '';
+        return `${jobName}|${desc}`;
+    }
+
+    function extractDetailFromDOM(expectedJobId, options = {}) {
+        const { requireStrictId = true, preClickSignature = null, expectedJobName = '' } = options;
+        const detailBox = document.querySelector('.job-detail-box, .job-detail-container');
+        if (!detailBox) return null;
+
+        // 1. 优先从详情区域内所有包含 /job_detail/ 的链接提取当前右侧详情对应的 jobId
+        let currentDetailJobId = '';
+        let matchedHref = '';
+        const detailLinks = detailBox.querySelectorAll('a[href*="/job_detail/"]');
+        for (const link of detailLinks) {
+            const href = link.getAttribute('href') || '';
+            const m = href.match(/\/job_detail\/([^.?#]+)\.html/);
+            if (m && m[1]) {
+                currentDetailJobId = m[1];
+                matchedHref = href;
+                break;
+            }
+        }
+
+        // 2. 其次从明确带有职位 ID 前缀的 ka 属性提取（必须严格匹配前缀，避免把普通 ka 属性值误当作 jobId）
+        if (!currentDetailJobId) {
+            const kaRules = [
+                { sel: 'a[ka^="company_more_job_"]', prefix: 'company_more_job_' },
+                { sel: 'a[ka^="popjob_interest_tosign_"]', prefix: 'popjob_interest_tosign_' },
+                { sel: 'a[ka^="cpc_job_list_chat_"]', prefix: 'cpc_job_list_chat_' }
+            ];
+            for (const { sel, prefix } of kaRules) {
+                const el = detailBox.querySelector(sel);
+                const ka = el ? (el.getAttribute('ka') || '') : '';
+                if (ka.startsWith(prefix) && ka.length > prefix.length) {
+                    currentDetailJobId = ka.slice(prefix.length);
+                    break;
+                }
+            }
+        }
+
+        const jobName = cleanStr(detailBox.querySelector('.job-name, .job-title')?.textContent);
+        const descNode = detailBox.querySelector('.job-detail-body .desc, .job-sec-text, .job-detail-section .desc');
+        const postDescription = descNode ? cleanMultiLineStr(descNode.innerText || descNode.textContent) : '';
+
+        // 校验右侧详情是否确实对应当前正在处理的卡片（防止误读上一张卡片的 DOM 导致跳过当前卡片）
+        if (expectedJobId) {
+            if (currentDetailJobId) {
+                if (currentDetailJobId !== expectedJobId) {
+                    return null;
+                }
+            } else {
+                // 如果右侧详情面板中没有提取到明确的 jobId：
+                // 在点击前检查或阶段性检查（requireStrictId=true）时必须返回 null，绝不跳过点击
+                if (requireStrictId) {
+                    return null;
+                }
+                // 仅在最终兜底（requireStrictId=false）时：必须满足详情内容已发生变化且职位名一致，才允许读取
+                const currentSig = `${jobName}|${cleanStr(postDescription).slice(0, 100)}`;
+                if (preClickSignature !== null && currentSig === preClickSignature) {
+                    return null;
+                }
+                if (expectedJobName && jobName && jobName !== expectedJobName) {
+                    return null;
+                }
+            }
+        }
+
+        const actualJobId = currentDetailJobId || expectedJobId;
+        if (!jobName && !actualJobId) return null;
+
+        const salary = cleanStr(detailBox.querySelector('.job-salary, .salary')?.textContent);
+        const tags = Array.from(detailBox.querySelectorAll('.tag-list li, .job-header-info .tag-list span')).map(el => cleanStr(el.textContent)).filter(Boolean);
+        const location = tags[0] || '';
+        const experience = tags[1] || '';
+        const degree = tags[2] || '';
+
+        // 技能标签
+        const skillTags = Array.from(detailBox.querySelectorAll('.job-label-list li, .job-keyword-list li')).map(el => cleanStr(el.textContent)).filter(Boolean);
+
+        // HR 与公司信息
+        const bossName = cleanStr(detailBox.querySelector('.job-boss-info .name')?.childNodes[0]?.textContent);
+        const bossAttr = cleanStr(detailBox.querySelector('.job-boss-info .boss-info-attr')?.textContent);
+        let compName = '';
+        let bossTitle = '';
+        if (bossAttr.includes('·')) {
+            const parts = bossAttr.split('·').map(s => s.trim());
+            compName = parts[0] || '';
+            bossTitle = parts.slice(1).join('·');
+        } else {
+            compName = bossAttr;
+        }
+
+        const activeTime = formatActiveTime(detailBox.querySelector('.job-boss-info .boss-active-time')?.textContent);
+        const address = cleanStr(detailBox.querySelector('.job-address-desc, .location-address')?.textContent);
+
+        // 如果从查看更多链接中抓取到了 securityId 和 lid，补全到缓存中
+        let securityId = '';
+        let lid = '';
+        if (matchedHref) {
+            try {
+                const u = new URL(matchedHref, window.location.origin);
+                securityId = u.searchParams.get('securityId') || '';
+                lid = u.searchParams.get('lid') || '';
+            } catch (e) {}
+        }
+
+        let baseRow = interceptedListJobs.has(actualJobId) ? JSON.parse(JSON.stringify(interceptedListJobs.get(actualJobId))) : {};
+        if (securityId && !baseRow.securityId) baseRow.securityId = securityId;
+        if (lid && !baseRow.lid) baseRow.lid = lid;
+
+        // 构造虚拟详情 JSON，兼容 options.js 和 normalizeJob
+        const pseudoDetail = {
+            zpData: {
+                jobInfo: {
+                    encryptId: actualJobId,
+                    jobName: jobName || baseRow.jobName || '',
+                    salaryDesc: salary || baseRow.salaryDesc || '',
+                    experienceName: experience || baseRow.jobExperience || '',
+                    degreeName: degree || baseRow.jobDegree || '',
+                    locationName: location || baseRow.cityName || '',
+                    postDescription: postDescription,
+                    showSkills: skillTags.join(','),
+                    address: address,
+                    securityId: securityId || baseRow.securityId || ''
+                },
+                bossInfo: {
+                    name: bossName || baseRow.bossName || '',
+                    title: bossTitle || baseRow.bossTitle || '',
+                    activeTimeDesc: activeTime,
+                    brandName: compName || baseRow.brandName || ''
+                },
+                brandComInfo: {
+                    brandName: compName || baseRow.brandName || '',
+                    scaleName: baseRow.brandScaleName || '',
+                    stageName: baseRow.brandStageName || '',
+                    industryName: baseRow.brandIndustry || ''
+                }
+            }
+        };
+
+        return {
+            ...baseRow,
+            jobId: actualJobId,
+            platform: 'boss',
+            dataSource: 'boss_scraped_v2',
+            '平台': 'boss',
+            '数据来源': 'boss_scraped_v2',
+            '职位ID': actualJobId,
+            '职位名称': jobName || baseRow.jobName || '',
+            '薪资待遇': salary || baseRow.salaryDesc || '',
+            '工作地点': location || [baseRow.cityName, baseRow.areaDistrict, baseRow.businessDistrict].filter(Boolean).join('·') || '',
+            '工作经验': experience || baseRow.jobExperience || '',
+            '学历要求': degree || baseRow.jobDegree || '',
+            '职位描述': postDescription,
+            '技能标签': skillTags.join(',') || (baseRow.skills ? baseRow.skills.join(',') : ''),
+            '公司名称': compName || baseRow.brandName || '',
+            '公司全称': compName || baseRow.brandName || '',
+            'HR姓名': bossName || baseRow.bossName || '',
+            'HR职位': bossTitle || baseRow.bossTitle || '',
+            'HR活跃度': activeTime || '',
+            '详细完整地址': address || '',
+            '详细地址': address || '',
+            '职位链接': `https://www.zhipin.com/job_detail/${actualJobId}.html`,
+            jobDetail: pseudoDetail,
+            _extracted_from_dom: true
+        };
+    }
+
+    function extractCardFallback(job) {
+        const cardEl = job.el;
+        const jobId = job.jobId;
+        let baseRow = interceptedListJobs.has(jobId) ? JSON.parse(JSON.stringify(interceptedListJobs.get(jobId))) : {};
+
+        const jobName = cleanStr(cardEl?.querySelector('.job-name')?.textContent) || job.jobName || baseRow.jobName || '';
+        const salary = cleanStr(cardEl?.querySelector('.job-salary')?.textContent) || baseRow.salaryDesc || '';
+        const tagEls = cardEl ? cardEl.querySelectorAll('.tag-list li') : [];
+        const tags = Array.from(tagEls).map(el => cleanStr(el.textContent)).filter(Boolean);
+        const exp = tags[0] || baseRow.jobExperience || '';
+        const deg = tags[1] || baseRow.jobDegree || '';
+        const compName = cleanStr(cardEl?.querySelector('.boss-name')?.textContent) || baseRow.brandName || '';
+        const location = cleanStr(cardEl?.querySelector('.company-location')?.textContent) || baseRow.cityName || '';
+
+        return {
+            ...baseRow,
+            jobId: jobId,
+            platform: 'boss',
+            dataSource: 'boss_scraped_v2',
+            '平台': 'boss',
+            '数据来源': 'boss_scraped_v2',
+            '职位ID': jobId,
+            '职位名称': jobName,
+            '薪资待遇': salary,
+            '工作地点': location,
+            '工作经验': exp,
+            '学历要求': deg,
+            '公司名称': compName,
+            '公司全称': compName,
+            '职位链接': `https://www.zhipin.com/job_detail/${jobId}.html`,
+            _card_fallback: true
+        };
     }
 
     function collectJobsFromDOM() {
         const seen = new Set();
         const list = [];
-        document.querySelectorAll('.job-card-wrap').forEach(cardWrap => {
+        // 兼容不同的卡片包裹元素：.job-card-wrap, .card-area, .job-card-box
+        document.querySelectorAll('.job-card-wrap, .card-area, .job-card-box').forEach(cardWrap => {
             const nameLink = cardWrap.querySelector('a.job-name') || cardWrap.querySelector('a[href*="/job_detail/"]');
             if (!nameLink) return;
             const href = nameLink.getAttribute('href') || '';
@@ -468,21 +939,78 @@
                 let lid = '';
                 try {
                     // 尝试从 URL 参数中解析 securityId 和 lid
-                    const urlObj = new URL(href, 'https://www.zhipin.com');
+                    const urlObj = new URL(href, window.location.origin);
                     securityId = urlObj.searchParams.get('securityId') || '';
                     lid = urlObj.searchParams.get('lid') || '';
                 } catch (e) { }
 
                 if (!seen.has(jobId)) {
                     seen.add(jobId);
-                    list.push({ jobId, securityId, lid, el: cardWrap, link: nameLink });
+                    const jobName = cleanStr(nameLink.textContent);
+                    const cardEl = nameLink.closest('.job-card-wrap, .card-area, .job-card-box') || cardWrap;
+                    const listObj = interceptedListJobs.get(jobId);
+                    const compEl = cardEl.querySelector('.boss-name, .company-name, .company-info a');
+                    const companyName = cleanStr(compEl?.textContent) || (listObj && listObj.brandName) || '';
+                    list.push({ jobId, securityId, lid, el: cardEl, link: nameLink, jobName, companyName });
                 }
             }
         });
         return list;
     }
 
+    // 过滤本轮已处理、历史已抓取（当开启 skipScraped 时）及黑名单企业的职位卡片，避免无效点击触发风控
+    function filterPendingJobs(allJobs) {
+        let skippedScraped = 0;
+        let skippedBlacklisted = 0;
+        const pending = [];
+
+        for (const job of allJobs) {
+            if (sessionProcessedIds.has(job.jobId)) continue;
+
+            if (isSkipScraped) {
+                if (scrapedIds.has(job.jobId)) {
+                    sessionProcessedIds.add(job.jobId);
+                    skippedScraped++;
+                    continue;
+                }
+                if (job.companyName && isCompanyBlacklisted(job.companyName)) {
+                    sessionProcessedIds.add(job.jobId);
+                    skippedBlacklisted++;
+                    console.log(`[Boss Scraper] 🚫 跳过黑名单企业职位: 【${job.companyName}】${job.jobName}`);
+                    continue;
+                }
+            }
+            pending.push(job);
+        }
+
+        if (skippedScraped > 0 || skippedBlacklisted > 0) {
+            console.log(`[Boss Scraper] 🛡️ 防风控预筛：自动跳过已抓职位 ${skippedScraped} 个，黑名单企业职位 ${skippedBlacklisted} 个`);
+        }
+        return pending;
+    }
+
+    function refreshJobElementsIfDetached(job) {
+        if (job.el && job.el.isConnected && job.link && job.link.isConnected) {
+            return;
+        }
+        const liveLink = document.querySelector(`a[href*="/job_detail/${job.jobId}.html"]`);
+        if (liveLink) {
+            job.link = liveLink;
+            job.el = liveLink.closest('.job-card-wrap, .card-area, .job-card-box') || liveLink.parentElement || job.el;
+        }
+    }
+
     function startScraping() {
+        clearAllTimers();
+        isWaitingForDetail = false;
+        currentProcessingJobId = null;
+
+        const riskReason = detectRiskControlDOM();
+        if (riskReason) {
+            triggerRiskControlCircuitBreaker(riskReason);
+            return;
+        }
+
         const allJobs = collectJobsFromDOM();
         if (allJobs.length === 0) {
             alert('未发现职位卡片！请先搜索职位，等列表加载完毕后再开始。');
@@ -491,15 +1019,16 @@
             return;
         }
 
-        // Filter based on sessionProcessedIds to avoid clicking the same card multiple times in this single run
-        currentList = allJobs.filter(j => !sessionProcessedIds.has(j.jobId));
-        currentIndex = 0;
         isRunning = true;
+        currentList = filterPendingJobs(allJobs);
+        currentIndex = 0;
 
         if (currentList.length === 0) {
-            if (isAutoScroll) { loadMoreByScroll(); }
-            else {
-                alert('当前所有可见职位已全部抓取！');
+            if (isAutoScroll) {
+                notifyPopupStatus('当前可见职位均已抓过，正在滚动加载新职位...');
+                loadMoreByScroll();
+            } else {
+                alert('当前可见职位已全部抓取（或已在缓存/黑名单中）！');
                 isRunning = false;
                 notifyPopupStatus('完毕');
             }
@@ -512,227 +1041,450 @@
     function processNext() {
         if (!isRunning) return;
 
+        clearAllTimers();
+
+        const riskReason = detectRiskControlDOM();
+        if (riskReason) {
+            triggerRiskControlCircuitBreaker(riskReason);
+            return;
+        }
+
         if (currentIndex >= currentList.length) {
+            isWaitingForDetail = false;
+            currentProcessingJobId = null;
             if (isAutoScroll) { loadMoreByScroll(); }
             else { alert('🎉 本批职位全部抓完！'); isRunning = false; notifyPopupStatus('完毕'); }
             return;
         }
 
         const job = currentList[currentIndex];
-        sessionProcessedIds.add(job.jobId);
-        notifyPopupStatus(`正在点击第 ${currentIndex + 1}/${currentList.length}`);
+        refreshJobElementsIfDetached(job);
 
-        try { job.el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) { }
+        const stepToken = ++currentStepToken;
+        isWaitingForDetail = true;
+        currentProcessingJobId = job.jobId;
 
-        setTimeout(() => {
+        notifyPopupStatus(`正在处理第 ${currentIndex + 1}/${currentList.length}: ${job.jobName || job.jobId}`);
+
+        // 零点击极速防风控模式：仅提取列表 JSON + 卡片 DOM，不发起任何卡片点击
+        if (isListOnlyMode) {
+            const listFallbackRow = extractCardFallback(job);
+            listFallbackRow._list_only_mode = true;
+            completeCurrentJob(
+                job.jobId,
+                listFallbackRow,
+                `🛡️ [仅抓列表模式 ${scrapedData.length + (scrapedIds.has(job.jobId) ? 0 : 1)}] ${job.jobName || ''} | ${listFallbackRow['薪资待遇'] || ''}`
+            );
+            return;
+        }
+
+        try {
+            if (job.el && job.el.scrollIntoView) {
+                job.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        } catch (e) { }
+
+        waitTimer = setTimeout(() => {
+            if (!isRunning || !isWaitingForDetail || stepToken !== currentStepToken) return;
+
+            const riskBeforeClick = detectRiskControlDOM();
+            if (riskBeforeClick) {
+                triggerRiskControlCircuitBreaker(riskBeforeClick);
+                return;
+            }
+
+            refreshJobElementsIfDetached(job);
+
+            // 1. 优先使用已拦截的详情数据
             const cachedDetail = interceptedDetailJobs.get(job.jobId);
-
             if (cachedDetail) {
-                // 如果记忆库里已经有这个职位的详情数据（比如刚进页面就自动加载的第一个职位）
-                // 我们就不需要模拟点击，也不需要去重新 Fetch，直接拿着数据用！
+                console.log(`[Boss Scraper] ⚡ 命中已拦截详情 JSON: ${job.jobId}`);
                 onDetailApiCaptured(cachedDetail);
-            } else {
-                // 根据你的要求，这里改为“阶梯式”顺序执行。
-                // 只要某一步成功触发了 API，拦截器收到数据后会调用 onDetailApiCaptured，
-                // 里面的 clearTimeout(waitTimer) 就会立刻掐断后续所有的执行计划！
+                return;
+            }
 
+            // 2. 检查右侧详情是否刚好已经展示了当前职位（必须严格匹配 currentDetailJobId === job.jobId）
+            const currentDomDetail = extractDetailFromDOM(job.jobId, { requireStrictId: true });
+            if (currentDomDetail && (currentDomDetail['职位名称'] || currentDomDetail['职位描述'])) {
+                completeCurrentJob(
+                    job.jobId,
+                    currentDomDetail,
+                    `[Boss Scraper] ⚡ 右侧已展示该职位详情，直接读取 DOM: ${job.jobId}`
+                );
+                return;
+            }
 
-                // 保持原有的模拟点击逻辑不变（触发左右分栏布局加载）
-                try { job.link.click(); } catch (e) { }
+            const preClickSignature = getDetailBoxSignature();
 
-                // 新增功能：通过后台隐式打开一个新的标签页加载职位详情 (暂时停用)
-                /* 
-                if (job.link) {
-                    const originalHref = job.link.getAttribute('href');
-                    if (originalHref) {
-                        const separator = originalHref.includes('?') ? '&' : '?';
-                        const newTabUrl = originalHref + separator + 'auto_close=1';
-                        // 使用绝对路径以防 originalHref 是相对路径
-                        const absoluteUrl = new URL(newTabUrl, window.location.origin).href;
+            // 3. 拟人化点击卡片触发右侧详情加载
+            const boxEl = (job.el && job.el.matches && job.el.matches('.job-card-box'))
+                ? job.el
+                : (job.el ? job.el.querySelector('.job-card-box') : null);
+            const infoEl = job.el ? job.el.querySelector('.job-info, .job-card-left, .job-card-body') : null;
+            const clickTarget = infoEl || boxEl || job.link || job.el;
 
-                        try {
-                            chrome.runtime.sendMessage({ action: 'BOSS_OPEN_TAB', url: absoluteUrl });
-                        } catch (e) { }
-                    }
+            sessionDetailClickCount++;
+            jobsScrapedSinceRest++;
+            simulateRealClick(clickTarget, clickTarget === job.link);
+
+            // 阶段 1：给予充足的随机等待时间 (2.4s ~ 3.3s)，避免短时间高频连击
+            waitTimer = setTimeout(() => {
+                if (!isRunning || !isWaitingForDetail || stepToken !== currentStepToken) return;
+
+                const riskCheck1 = detectRiskControlDOM();
+                if (riskCheck1) {
+                    triggerRiskControlCircuitBreaker(riskCheck1);
+                    return;
                 }
-                */
 
-                // 等待 2 秒，如果第一步没成功（没有被 clearTimeout 掐断），则自动执行第二步
+                const checkApi1 = interceptedDetailJobs.get(job.jobId);
+                if (checkApi1) {
+                    onDetailApiCaptured(checkApi1);
+                    return;
+                }
+
+                const checkDom1 = extractDetailFromDOM(job.jobId, { requireStrictId: true });
+                if (checkDom1 && (checkDom1['职位名称'] || checkDom1['职位描述'])) {
+                    completeCurrentJob(
+                        job.jobId,
+                        checkDom1,
+                        `[Boss Scraper] 🎯 阶段1 DOM 捕获成功: ${job.jobId}`
+                    );
+                    return;
+                }
+
+                // 如果右侧面板内容已经发生了变化且职位名一致，直接读取 DOM，不再发起第二次点击
+                const relaxedDom1 = extractDetailFromDOM(job.jobId, {
+                    requireStrictId: false,
+                    preClickSignature,
+                    expectedJobName: job.jobName
+                });
+                if (relaxedDom1 && (relaxedDom1['职位名称'] || relaxedDom1['职位描述'])) {
+                    completeCurrentJob(
+                        job.jobId,
+                        relaxedDom1,
+                        `[Boss Scraper] 🎯 阶段1签名变更 DOM 捕获成功: ${job.jobId}`
+                    );
+                    return;
+                }
+
+                // 仅当右侧完全未响应时，才做一次温和补点（移除原先高危的裸 fetch('/wapi/zpgeek/job/detail.json')）
+                refreshJobElementsIfDetached(job);
+                const retryTarget = boxEl || job.link || job.el;
+                simulateRealClick(retryTarget, true);
+
+                // 阶段 2：等待 2.3s ~ 3.0s 后兜底保存
                 waitTimer = setTimeout(() => {
-                    try { job.el.click(); } catch (e) { }
+                    if (!isRunning || !isWaitingForDetail || stepToken !== currentStepToken) return;
 
-                    // 再等待 2 秒，如果第二步也没成功，则自动执行第三步
-                    waitTimer = setTimeout(() => {
-                        // 根据你的要求，注释掉模拟人类鼠标的部分
-                        // simulateRealClick(job.link);
-                        // simulateRealClick(job.el);
+                    const riskCheck2 = detectRiskControlDOM();
+                    if (riskCheck2) {
+                        triggerRiskControlCircuitBreaker(riskCheck2);
+                        return;
+                    }
 
-                        // 最后等待 4 秒，如果所有点击都被 Boss 直聘屏蔽了，启动终极兜底
-                        waitTimer = setTimeout(() => {
-                            const listObj = interceptedListJobs.get(job.jobId);
-                            const securityId = (listObj && listObj.securityId) || job.securityId;
-                            const lid = (listObj && listObj.lid) || job.lid;
+                    const checkApi2 = interceptedDetailJobs.get(job.jobId);
+                    if (checkApi2) {
+                        onDetailApiCaptured(checkApi2);
+                        return;
+                    }
 
-                            if (securityId) {
-                                const url = `/wapi/zpgeek/job/detail.json?securityId=${encodeURIComponent(securityId)}&lid=${encodeURIComponent(lid || '')}`;
-                                fetch(url).then(res => res.json()).then(json => {
-                                    onDetailApiCaptured(json);
-                                }).catch(e => {
-                                    scheduleNextJob();
-                                });
-                            } else {
-                                scheduleNextJob();
-                            }
-                        }, 4000); // 步骤3 专属 4 秒等待
-                    }, 2000); // 步骤2 专属 2 秒等待
-                }, 2000); // 步骤1 专属 2 秒等待
-            }
-
-            function simulateRealClick(element) {
-                if (!element) return;
-                try {
-                    ['mousedown', 'mouseup', 'click'].forEach(eventType => {
-                        const event = new MouseEvent(eventType, {
-                            view: window,
-                            bubbles: true,
-                            cancelable: true,
-                            buttons: 1
-                        });
-                        element.dispatchEvent(event);
+                    const finalDom = extractDetailFromDOM(job.jobId, {
+                        requireStrictId: false,
+                        preClickSignature,
+                        expectedJobName: job.jobName
                     });
-                } catch (e) { }
-            }
+                    if (finalDom && (finalDom['职位名称'] || finalDom['职位描述'])) {
+                        completeCurrentJob(
+                            job.jobId,
+                            finalDom,
+                            `[Boss Scraper] 🎯 最终 DOM 兜底成功: ${job.jobId}`
+                        );
+                    } else {
+                        const cardFallback = extractCardFallback(job);
+                        completeCurrentJob(
+                            job.jobId,
+                            cardFallback,
+                            `[Boss Scraper] ⚠️ 详情未返回，使用列表+卡片基础数据兜底保存: ${job.jobId}`
+                        );
+                    }
+                }, getRandomInt(2300, 3000));
+            }, getRandomInt(2400, 3300));
 
-        }, getRandomInt(400, 900));
+        }, getRandomInt(600, 1100));
     }
 
     function scheduleNextJob() {
         if (!isRunning) return;
-        currentIndex++;
-        jobsScrapedSinceRest++;
+        clearAllTimers();
+        isWaitingForDetail = false;
+        currentProcessingJobId = null;
+        const stepToken = ++currentStepToken;
 
-        if (currentIndex >= currentList.length) {
-            if (isAutoScroll) { setTimeout(loadMoreByScroll, 1500); }
-            else { alert('🎉 本批职位全部抓完！'); isRunning = false; notifyPopupStatus('完毕'); }
+        const riskReason = detectRiskControlDOM();
+        if (riskReason) {
+            triggerRiskControlCircuitBreaker(riskReason);
             return;
         }
 
-        // 适当控制抓取节奏，每次抓完一个职位随机等待 1.5秒 到 3.5秒，防封号
-        const delay = getRandomInt(1500, 3500);
-        notifyPopupStatus(`安全休眠 ${(delay / 1000).toFixed(1)}s`);
-        setTimeout(() => {
-            processNext();
-        }, delay);
+        currentIndex++;
+
+        const proceedAfterDelay = () => {
+            if (!isRunning || stepToken !== currentStepToken) return;
+            if (currentIndex >= currentList.length) {
+                if (isAutoScroll) {
+                    loadMoreByScroll();
+                } else {
+                    alert('🎉 本批职位全部抓完！');
+                    isRunning = false;
+                    notifyPopupStatus('完毕');
+                }
+            } else {
+                processNext();
+            }
+        };
+
+        // 如果当前列表已经到底且未开启自动翻页，直接结束，无需等待冷却
+        if (currentIndex >= currentList.length && !isAutoScroll) {
+            alert('🎉 本批职位全部抓完！');
+            isRunning = false;
+            notifyPopupStatus('完毕');
+            return;
+        }
+
+        // 零点击列表模式只需极短间隔
+        if (isListOnlyMode) {
+            const listDelay = currentIndex >= currentList.length ? getRandomInt(1500, 2500) : getRandomInt(180, 380);
+            waitTimer = setTimeout(proceedAfterDelay, listDelay);
+            return;
+        }
+
+        // 全自动深度冷却续抓：每连续真实点击满 50~65 条，自动进行 90~150 秒深度冷却，随后自动清零继续抓取
+        if (sessionDetailClickCount >= nextDeepCooldownLimit) {
+            const reachedCount = sessionDetailClickCount;
+            sessionDetailClickCount = 0;
+            nextDeepCooldownLimit = getRandomInt(50, 65);
+            jobsScrapedSinceRest = 0;
+            nextRestLimit = getRandomInt(8, 14);
+
+            const cooldownMs = getRandomInt(90000, 150000);
+            let remainingSec = Math.ceil(cooldownMs / 1000);
+
+            showToast(`🧊 已连续抓取 ${reachedCount} 条，进入 ${remainingSec}s 深度冷却，倒计时结束后将自动继续！`, 6000, '#0284c7');
+            notifyPopupStatus(`🧊 深度冷却中 (${remainingSec}s 后自动续抓)...`);
+
+            restCountdownTimer = setInterval(() => {
+                remainingSec--;
+                if (remainingSec > 0 && isRunning && stepToken === currentStepToken) {
+                    notifyPopupStatus(`🧊 深度冷却中 (${remainingSec}s 后自动续抓)...`);
+                } else if (restCountdownTimer) {
+                    clearInterval(restCountdownTimer);
+                    restCountdownTimer = null;
+                }
+            }, 1000);
+
+            waitTimer = setTimeout(() => {
+                if (restCountdownTimer) {
+                    clearInterval(restCountdownTimer);
+                    restCountdownTimer = null;
+                }
+                proceedAfterDelay();
+            }, cooldownMs);
+            return;
+        }
+
+        // 分批疲劳长休眠：每点击 8~14 个职位详情，自动进行一次 15~28 秒的阶段性长休息
+        if (jobsScrapedSinceRest >= nextRestLimit) {
+            jobsScrapedSinceRest = 0;
+            nextRestLimit = getRandomInt(8, 14);
+            const restMs = getRandomInt(15000, 28000);
+            let remainingSec = Math.ceil(restMs / 1000);
+
+            notifyPopupStatus(`☕ 防风控阶段休眠中 (${remainingSec}s)...`);
+            restCountdownTimer = setInterval(() => {
+                remainingSec--;
+                if (remainingSec > 0 && isRunning && stepToken === currentStepToken) {
+                    notifyPopupStatus(`☕ 防风控阶段休眠中 (${remainingSec}s)...`);
+                } else if (restCountdownTimer) {
+                    clearInterval(restCountdownTimer);
+                    restCountdownTimer = null;
+                }
+            }, 1000);
+
+            waitTimer = setTimeout(() => {
+                if (restCountdownTimer) {
+                    clearInterval(restCountdownTimer);
+                    restCountdownTimer = null;
+                }
+                proceedAfterDelay();
+            }, restMs);
+            return;
+        }
+
+        if (currentIndex >= currentList.length) {
+            const scrollWait = getRandomInt(1800, 3000);
+            waitTimer = setTimeout(proceedAfterDelay, scrollWait);
+            return;
+        }
+
+        // 拟人化阅读节奏：基础 2.6s~5.2s，20% 概率触发一次深读停顿 (+1.5s~3.2s)
+        let delay = getRandomInt(2600, 5200);
+        if (Math.random() < 0.2) {
+            delay += getRandomInt(1500, 3200);
+        }
+        notifyPopupStatus(`安全休眠 ${(delay / 1000).toFixed(1)}s (距小休 ${Math.max(1, nextRestLimit - jobsScrapedSinceRest)} 条 / 距大休 ${Math.max(1, nextDeepCooldownLimit - sessionDetailClickCount)} 条)`);
+        waitTimer = setTimeout(proceedAfterDelay, delay);
     }
 
     function loadMoreByScroll() {
-        notifyPopupStatus(`等待新数据加载...`);
+        if (!isRunning) return;
+        clearAllTimers();
+        isWaitingForDetail = false;
+        currentProcessingJobId = null;
+        const stepToken = ++currentStepToken;
+
+        notifyPopupStatus(`正在拟人滚动加载新职位...`);
 
         let tries = 0;
+        let duplicateBatchCount = 0;
+        let lastDomCardCount = document.querySelectorAll('.card-area, .job-card-wrap').length;
         scrollSessionInterceptedCount = 0;
         scrollSessionHasNewJobs = false;
 
-        const poll = setInterval(() => {
-            if (!isRunning) {
-                clearInterval(poll);
+        const stepScroll = () => {
+            if (!isRunning || stepToken !== currentStepToken) {
+                clearAllTimers();
                 return;
             }
+
+            const riskReason = detectRiskControlDOM();
+            if (riskReason) {
+                triggerRiskControlCircuitBreaker(riskReason);
+                return;
+            }
+
             tries++;
 
-            // 1. 温柔滚动，每 6 次尝试进行一次大跨度滚动以触发触底监听
-            if (tries % 6 === 0) {
-                window.scrollBy({ top: 600, behavior: 'smooth' });
+            // 1. 拟人化随机滚动步长与偶发微幅回滚
+            if (Math.random() < 0.15 && window.scrollY > 300) {
+                window.scrollBy({ top: -getRandomInt(40, 95), behavior: 'smooth' });
+            } else if (tries % 5 === 0) {
+                window.scrollBy({ top: getRandomInt(540, 820), behavior: 'smooth' });
             } else {
-                window.scrollBy({ top: 350, behavior: 'smooth' });
+                window.scrollBy({ top: getRandomInt(260, 510), behavior: 'smooth' });
             }
 
-            // 2. 检测 DOM 中是否已有未被本轮处理的新职位卡片渲染出来
-            const newJobs = collectJobsFromDOM().filter(j => !sessionProcessedIds.has(j.jobId));
-            if (newJobs.length > 0) {
-                clearInterval(poll);
-                const wait = getRandomInt(1800, 3200);
-                notifyPopupStatus(`新卡片已渲染，等待 ${(wait / 1000).toFixed(1)}s`);
-                setTimeout(() => { if (isRunning) startScraping(); }, wait);
+            // 2. 检测 DOM 中是否已有未被处理（且未在已抓缓存/黑名单中）的新职位卡片
+            const pendingJobs = filterPendingJobs(collectJobsFromDOM());
+            if (pendingJobs.length > 0) {
+                clearAllTimers();
+                const wait = getRandomInt(1600, 2800);
+                notifyPopupStatus(`发现 ${pendingJobs.length} 个新职位，等待 ${(wait / 1000).toFixed(1)}s`);
+                waitTimer = setTimeout(() => {
+                    if (isRunning && stepToken === currentStepToken) {
+                        startScraping();
+                    }
+                }, wait);
                 return;
             }
 
-            // 3. 【辅助判断一：接口明确返回已无更多数据】
-            // 如果最近拦截到的列表 JSON 接口中明确带有 hasMore === false，且当前 DOM 已无新卡片，滚动确认数次后判定完毕
-            if (lastJobListHasMore === false && tries >= 6) {
-                clearInterval(poll);
-                alert(`🎉 抓取完毕！服务端接口已明确返回无更多职位 (hasMore=false)，共缓存 ${scrapedData.length} 条数据。`);
-                isRunning = false;
-                notifyPopupStatus('完毕');
-                return;
+            // 2.5 检测页面是否刚刚追加了一批全是重复 ID 的卡片（Boss 推荐流常见现象：整页 15~30 张全是前面出现过的重复卡片）
+            const currentDomCardCount = document.querySelectorAll('.card-area, .job-card-wrap').length;
+            if (currentDomCardCount > lastDomCardCount) {
+                lastDomCardCount = currentDomCardCount;
+                duplicateBatchCount++;
+                if (duplicateBatchCount <= 6) {
+                    tries = Math.min(tries, 4);
+                    const allCards = document.querySelectorAll('.card-area, .job-card-wrap');
+                    const lastCard = allCards[allCards.length - 1];
+                    if (lastCard && lastCard.scrollIntoView) {
+                        try { lastCard.scrollIntoView({ behavior: 'smooth', block: 'end' }); } catch (e) {}
+                    }
+                    notifyPopupStatus(`跳过新加载的重复卡片批次 (${duplicateBatchCount})，继续下滑...`);
+                    scrollPollTimer = setTimeout(stepScroll, getRandomInt(1000, 1750));
+                    return;
+                }
             }
 
-            // 4. 【网络延迟保护：如果滚动期间刚刚拦截到了含有新职位的 JSON 响应】
-            // 说明接口已响应，Vue DOM 正在挂载过程中，绝不能提前误判为结束，给予缓冲并重置部分重试计数
-            if (scrollSessionHasNewJobs && (Date.now() - lastJobListInterceptedTime < 3500)) {
-                notifyPopupStatus(`已拦截新职位数据，等待 DOM 渲染... (${tries})`);
+            // 3. 网络延迟保护：如果滚动期间刚刚拦截到了含有新职位的 JSON 响应
+            if (scrollSessionHasNewJobs && (Date.now() - lastJobListInterceptedTime < 3800)) {
+                notifyPopupStatus(`已拦截新职位数据，等待页面渲染... (${tries})`);
                 if (tries > 8) tries = 8;
+                scrollPollTimer = setTimeout(stepScroll, getRandomInt(950, 1650));
                 return;
             }
 
-            // 5. 滚动至第 16 次时做一次强制触底以激活可能的 IntersectionObserver 监听
-            if (tries === 16) {
-                window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+            // 4. 滚动至第 12 次时做一次触底滚动以激活 IntersectionObserver
+            if (tries === 12) {
+                window.scrollTo({ top: document.body.scrollHeight - getRandomInt(20, 120), behavior: 'smooth' });
             }
 
-            // 6. 【辅助判断二：多次向下滚动，且完全未拦截到新的列表 JSON 接口】
-            // 持续向下滚动达到 24 次（约 12 秒），且满足：
-            // ① DOM 始终没有新卡片渲染出来；
-            // ② 并且没有拦截到任何含有新职位的 JSON 接口（或者根本未发起任何新的列表请求）；
-            // 此时通过「DOM 到底 + 接口静默/无新数据」实现双重确认，真正判定全部抓取完毕！
-            if (tries >= 24) {
-                clearInterval(poll);
-                const reason = scrollSessionInterceptedCount === 0
-                    ? '多次向下滚动未触发任何列表 JSON 接口'
-                    : '多次向下滚动接口未返回任何未处理新职位';
-                console.log(`[Boss Scraper] 全部抓取完成判定触发: ${reason}`);
-                alert(`🎉 抓取完毕！页面已触底且接口未返回新职位，共缓存 ${scrapedData.length} 条数据。`);
+            // 5. 触底与结束判定
+            const isBottom = (window.innerHeight + window.scrollY) >= (document.documentElement.scrollHeight - 150);
+            if (tries >= 16 && (isBottom || lastJobListHasMore === false || tries >= 22)) {
+                clearAllTimers();
+                console.log(`[Boss Scraper] 全部抓取完成判定触发: 经过 ${tries} 次滚动未再发现待抓新职位卡片`);
+                alert(`🎉 抓取完毕！页面已触底且未发现更多待抓新职位，共缓存 ${scrapedData.length} 条数据。`);
                 isRunning = false;
                 notifyPopupStatus('完毕');
+                return;
             }
-        }, 500);
+
+            scrollPollTimer = setTimeout(stepScroll, getRandomInt(900, 1750));
+        };
+
+        scrollPollTimer = setTimeout(stepScroll, getRandomInt(600, 1100));
     }
 
-    // === 详情页自动抓取逻辑 ===
+    // === 详情页自动抓取逻辑（支持无 URL 参数的隐蔽自动关闭） ===
     if (location.href.includes('/job_detail/')) {
-        // 延迟2秒等待DOM完全渲染，然后自动抓取
+        const initDelay = getRandomInt(2100, 3400);
         setTimeout(() => {
-            const m = location.href.match(/\/job_detail\/([^.?#]+)\.html/);
-            const jobId = m ? m[1] : null;
-
-            // const bodyText = document.body.innerText || "";
-            // const isClosed = document.querySelector('.error-content') ||
-            //     bodyText.includes('该职位已关闭') ||
-            //     bodyText.includes('停止招聘') ||
-            //     bodyText.includes('该职位已下线') ||
-            //     bodyText.includes('职位不存在');
-
-            // if (isClosed && jobId) {
-            //     fetch(`http://localhost:3000/api/jobs/${jobId}/status`, {
-            //         method: 'PUT',
-            //         headers: { 'Content-Type': 'application/json' },
-            //         body: JSON.stringify({ status: 'expired' })
-            //     }).catch(() => { });
-            // }
+            const riskReason = detectRiskControlDOM();
+            if (riskReason) {
+                showToast(`🚨 ${riskReason}，已跳过自动提取`, 6000, '#ef4444');
+                return;
+            }
 
             scrapeSinglePage();
 
-            // 如果是通过扩展程序脚本自动打开的标签页，抓取完成后延迟自动关闭
-            if (location.href.includes('auto_close=1')) {
+            const scheduleTabClose = (delayMs) => {
+                const finalDelay = (delayMs && delayMs > 0) ? delayMs : getRandomInt(2500, 4800);
                 setTimeout(() => {
-                    // 关闭当前标签页
                     window.close();
-                    // 兜底方案：如果 window.close() 被浏览器拦截，可以通过 runtime 消息让 background 关闭当前 tab
                     try {
-                        chrome.runtime.sendMessage({ action: 'close_current_tab' });
+                        chrome.runtime.sendMessage({ action: 'close_current_tab' }).catch(() => {});
                     } catch (e) { }
-                }, 5000);
+                }, finalDelay);
+            };
+
+            // 1. 检查由 boss_interceptor.js 在 document_start 剥离并存入 sessionStorage 的自动关闭配置
+            let storedAutoCloseDelay = null;
+            try {
+                storedAutoCloseDelay = sessionStorage.getItem('__zp_ac_delay__');
+                if (storedAutoCloseDelay) {
+                    sessionStorage.removeItem('__zp_ac_delay__');
+                }
+            } catch (e) {}
+
+            if (storedAutoCloseDelay) {
+                scheduleTabClose(parseInt(storedAutoCloseDelay, 10));
+            } else if (location.href.includes('auto_close=1')) {
+                const match = location.href.match(/[?&]close_delay=(\d+)/);
+                const closeDelay = match ? parseInt(match[1], 10) : getRandomInt(2500, 4800);
+                scheduleTabClose(closeDelay);
+            } else if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+                // 2. 向 background 查询当前标签页是否由 BOSS_OPEN_TAB 后台打开
+                try {
+                    chrome.runtime.sendMessage({ action: 'check_boss_auto_close' }, (resp) => {
+                        if (chrome.runtime.lastError) return;
+                        if (resp && resp.autoClose) {
+                            scheduleTabClose(resp.closeDelay);
+                        }
+                    });
+                } catch (e) {}
             }
-        }, 2000);
+        }, initDelay);
     }
 
     // === 沟通聊天页面：一键反向提取企业黑名单 ===
@@ -941,6 +1693,20 @@
                 syncBtn.disabled = true;
                 syncBtn.textContent = '正在同步...';
 
+                // 1. 优先写入扩展本地存储 blacklisted_companies，确保抓取列表时也能立即跳过这些黑名单企业
+                chrome.storage.local.get(['blacklisted_companies'], (storageRes) => {
+                    const existing = Array.isArray(storageRes.blacklisted_companies) ? storageRes.blacklisted_companies : [];
+                    const mergedSet = new Set(existing);
+                    selected.forEach(s => {
+                        if (s.companyName) {
+                            mergedSet.add(s.companyName);
+                            const norm = normalizeCompanyNameForMatch(s.companyName);
+                            if (norm) blacklistedCompanies.add(norm);
+                        }
+                    });
+                    chrome.storage.local.set({ blacklisted_companies: Array.from(mergedSet) });
+                });
+
                 try {
                     const payload = {
                         companies: selected.map(s => ({
@@ -958,17 +1724,15 @@
                     const res = await resp.json();
 
                     if (res && res.success) {
-                        alert(`✅ 成功将 ${selected.length} 家企业加入黑名单！\n本地看板职位已自动隐藏过滤。`);
+                        alert(`✅ 成功将 ${selected.length} 家企业加入黑名单（已同步至插件本地缓存与看板服务）！`);
                         closeModal();
                     } else {
-                        alert('同步失败: ' + (res?.error || '无法连接到本地看板服务'));
-                        syncBtn.disabled = false;
-                        syncBtn.textContent = '⛔ 一键同步至黑名单';
+                        alert(`✅ 已将 ${selected.length} 家企业写入插件本地黑名单（本地看板服务返回: ${res?.error || '异常'}）`);
+                        closeModal();
                     }
                 } catch (err) {
-                    alert('同步出错，请确保本地 Job Dashboard (http://localhost:3000) 正在运行！\n' + err.message);
-                    syncBtn.disabled = false;
-                    syncBtn.textContent = '⛔ 一键同步至黑名单';
+                    alert(`✅ 已将 ${selected.length} 家企业写入插件本地黑名单！\n（注：本地看板 http://localhost:3000 未开启，仅保存在插件本地）`);
+                    closeModal();
                 }
             });
         }

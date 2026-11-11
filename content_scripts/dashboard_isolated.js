@@ -6,7 +6,8 @@ window.addEventListener('message', (event) => {
         try {
             chrome.runtime.sendMessage({ 
                 action: 'BOSS_OPEN_TAB', 
-                url: event.data.url 
+                url: event.data.url,
+                closeDelay: event.data.closeDelay
             });
         } catch (e) {
             console.error('Failed to send message to background script', e);
