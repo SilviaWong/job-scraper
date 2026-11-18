@@ -199,6 +199,11 @@ const AI_PROMPTS = {
 
 请确保内容真实、有针对性，能够给招聘经理留下良好印象。
 除了打招呼内容外不要出现任何其他内容，让用户可以直接拿返回的内容发出去。
+`,
+    AI_QUESTION_ANSWER_PROMPT: `
+你是一位求职者，正在参加面试。
+请结合提供的个人简历，以第一人称口语化的语气，给出一份有条理、有说服力的回答。如果简历中没有相关经验，请给出通用但专业的解答，并说明正在学习。
+回答要直接，不需要包含寒暄语，直接进入正题。
 `
 };
 
@@ -595,6 +600,198 @@ ${resume || '未提供简历'}`;
   }
 
 });
+
+// ==========================================
+// AI 流式传输 (SSE Port 连接)
+// ==========================================
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'ai-stream') return;
+
+  const abortController = new AbortController();
+  port.onDisconnect.addListener(() => {
+    abortController.abort();
+  });
+
+  port.onMessage.addListener(async (request) => {
+    try {
+      await handleAiStream(port, request, abortController.signal);
+    } catch (err) {
+      if (!abortController.signal.aborted) {
+        port.postMessage({ type: 'error', error: err.message || '流式传输异常' });
+      }
+    }
+  });
+});
+
+async function handleAiStream(port, request, abortSignal) {
+  const { action, url, key, model } = request;
+  if (!url || !key || !model) {
+    port.postMessage({ type: 'error', error: '缺少模型配置参数 (URL/Key/Model)' });
+    return;
+  }
+
+  let finalUrl = url.trim();
+  const isClaude = model.toLowerCase().includes('claude') || finalUrl.includes('anthropic');
+  const isGemini = model.toLowerCase().includes('gemini');
+
+  let systemPrompt = '';
+  let userPrompt = '';
+
+  if (action === 'streamScoreJob') {
+    systemPrompt = AI_PROMPTS.AI_SCORING_PROMPT;
+    userPrompt = `[我的简历]\n${request.resume || ''}\n\n[目标职位]\n公司：${request.company || ''}\n职位：${request.jobTitle || ''}\n要求：${request.reqs || ''}\n职位描述：\n${request.jobDesc || ''}`;
+  } else if (action === 'streamGenerateIntro') {
+    systemPrompt = AI_PROMPTS.AI_SELF_INTRODUCTION_PROMPT;
+    userPrompt = `[我的简历]\n${request.resume || ''}\n\n[目标职位]\n公司：${request.company || ''}\n职位：${request.jobTitle || ''}\n要求：${request.reqs || ''}\n职位描述：\n${request.jobDesc || ''}`;
+  } else if (action === 'streamAnswerQuestion') {
+    systemPrompt = AI_PROMPTS.AI_QUESTION_ANSWER_PROMPT;
+    userPrompt = `面试官问：\n"${request.questionTitle || ''}"\n\n[我的简历]\n${request.resume || '未提供简历'}`;
+  } else {
+    port.postMessage({ type: 'error', error: `未知流式操作: ${action}` });
+    return;
+  }
+
+  let headers = { 'Content-Type': 'application/json' };
+  let body = {};
+
+  if (isClaude && !finalUrl.includes('chat/completions')) {
+    headers['x-api-key'] = key;
+    headers['anthropic-version'] = '2023-06-01';
+    body = {
+      model: model,
+      max_tokens: action === 'streamScoreJob' ? 2048 : (action === 'streamGenerateIntro' ? 1024 : 1500),
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
+      stream: true
+    };
+  } else if (isGemini && !finalUrl.includes('chat/completions')) {
+    if (!finalUrl.includes(':streamGenerateContent')) {
+      finalUrl = finalUrl.replace(/\/$/, '') + `/v1beta/models/${model}:streamGenerateContent?alt=sse`;
+    }
+    headers['x-goog-api-key'] = key;
+    body = {
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      contents: [{ role: 'user', parts: [{ text: userPrompt }] }]
+    };
+  } else {
+    headers['Authorization'] = `Bearer ${key}`;
+    body = {
+      model: model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      stream: true
+    };
+  }
+
+  const response = await fetch(finalUrl, {
+    method: 'POST',
+    headers: headers,
+    body: JSON.stringify(body),
+    signal: abortSignal
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    port.postMessage({ type: 'error', error: `${response.status} ${response.statusText}\n${errorText}` });
+    return;
+  }
+
+  if (!response.body) {
+    port.postMessage({ type: 'error', error: '响应未包含有效可读流' });
+    return;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let accumulatedText = '';
+  let lineBuffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const chunk = decoder.decode(value, { stream: true });
+    lineBuffer += chunk;
+    const lines = lineBuffer.split('\n');
+    lineBuffer = lines.pop();
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith(':')) continue;
+
+      if (line.startsWith('data:')) {
+        const payloadStr = line.replace(/^data:\s*/, '').trim();
+        if (payloadStr === '[DONE]') continue;
+
+        try {
+          const parsed = JSON.parse(payloadStr);
+          let textDelta = '';
+
+          if (isClaude && !finalUrl.includes('chat/completions')) {
+            if (parsed.type === 'content_block_delta' && parsed.delta && parsed.delta.text) {
+              textDelta = parsed.delta.text;
+            }
+          } else if (isGemini && !finalUrl.includes('chat/completions')) {
+            textDelta = parsed.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          } else {
+            textDelta = parsed.choices?.[0]?.delta?.content || '';
+          }
+
+          if (textDelta) {
+            accumulatedText += textDelta;
+            port.postMessage({ type: 'chunk', text: textDelta, fullText: accumulatedText });
+          }
+        } catch (e) {
+          // 忽略中间未闭合数据
+        }
+      }
+    }
+  }
+
+  if (action === 'streamScoreJob') {
+    let totalScore = 0;
+    let matchLevel = '未知';
+    let foundScore = false;
+
+    try {
+      const match = accumulatedText.match(/\[\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]/);
+      if (match) {
+        const scores = [parseInt(match[1]), parseInt(match[2]), parseInt(match[3]), parseInt(match[4]), parseInt(match[5])];
+        totalScore = scores.reduce((a, b) => a + b, 0);
+        foundScore = true;
+      }
+    } catch (e) {}
+
+    if (!foundScore) {
+      const matchSingle = accumulatedText.match(/(\d{1,3})\s*分/);
+      if (matchSingle) {
+        totalScore = parseInt(matchSingle[1]);
+        foundScore = true;
+      } else {
+        totalScore = 60;
+      }
+    }
+
+    if (totalScore >= 80) matchLevel = '高匹配';
+    else if (totalScore >= 60) matchLevel = '中匹配';
+    else if (totalScore >= 40) matchLevel = '低匹配';
+    else matchLevel = '不建议';
+
+    port.postMessage({
+      type: 'done',
+      score: totalScore,
+      matchLevel: matchLevel,
+      resultText: accumulatedText
+    });
+  } else {
+    port.postMessage({
+      type: 'done',
+      resultText: accumulatedText
+    });
+  }
+}
 
 /*
 // Import normalizer for background auto-sync

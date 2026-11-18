@@ -1,140 +1,302 @@
-# 全平台招聘数据抓取扩展 (Job Scraper Extension)
+# 全平台招聘数据抓取与求职管理套件 (Job Scraper & Career Suite)
 
-这是一个基于 Chrome Extension 架构的招聘职位数据抓取工具，专门用于在主流招聘平台的前端页面上自动化提取职位列表和深层详情数据。它采用了**网络请求拦截 (Network Interception)** 与 **隐形 Iframe 深层 DOM 渲染**相结合的双层架构，既能确保抓取的高效性，也能绕过绝大部分基础的防爬虫机制。
+<p align="center">
+  <img src="icons/icon128.png" width="96" height="96" alt="Job Scraper Logo" />
+</p>
 
-## 🌟 支持的平台
+<p align="center">
+  <strong>一款基于 Chrome Extension Manifest V3 架构的新一代全平台招聘职位数据采集、清洗、去重与求职全生命周期管理中台</strong>
+</p>
 
-目前已全面支持国内四大主流招聘平台：
-1. **Boss 直聘** (www.zhipin.com)
-2. **前程无忧 51job** (jobs.51job.com / we.51job.com)
-3. **猎聘网** (c.liepin.com / www.liepin.com) - *支持瀑布流及传统翻页*
-4. **智联招聘** (sou.zhaopin.com)
-
-## 🚀 核心特性
-
-- **双引擎并行抓取**
-  - **JSON 拦截层 (Main World)**：通过拦截网页的 `XMLHttpRequest` 和 `fetch`，在第一时间无损捕获网站原生的原始职位列表数据。
-  - **DOM 提取层 (Isolated World)**：通过在当前页面动态创建隐形的 `iframe` 加载职位详情页，弥补 JSON 列表中缺失的深度信息（如详细职位描述、精确地址、福利标签等）。
-- **智能分页与瀑布流兼容**
-  - 支持传统点击“下一页”的翻页模式。
-  - 完美适配猎聘等网站的“瀑布流”（无限下拉）加载模式，通过内置的全局任务队列和持续自动滚动探测机制，实现无缝衔接。
-- **完善的防封控 (Anti-Bot) 机制**
-  - **拟人化休眠**：在抓取详情间隙加入随机时间的延迟，以及周期性的长休眠，模拟人类真实浏览节奏。
-  - **安全拦截熔断**：实时监控页面的重定向。如果遇到平台弹出的验证码（Captcha）或安全中心拦截，扩展会自动熔断停止，防止账号被封禁，并提醒用户手动接管。
-  - **内存回收优化**：针对长时间运行导致的内存泄漏问题，扩展会在销毁 iframe 前强行切断源引用（`about:blank`），显著降低浏览器崩溃率。
-- **统一的数据管理后台 (Apple macOS 风格)**
-  - 采用现代化的玻璃态 (Glassmorphism) 与 macOS 设计语言，提供精致的视觉体验和微交互。
-  - **多源数据列表**：支持分平台独立查看，或进入“全网合并去重”版块统一处理。支持关键字搜索、薪资/经验过滤。
-  - **投递看板 (Kanban)**：内置拖拽式看板（待投递、已投递、一面、二面、Offer 等状态），方便管理整个求职生命周期。
-  - **数据大盘 (Dashboard)**：自动生成基于全网抓取数据的统计图表（薪资分布、地区分布、学历要求等）以及高频技能词云 (Word Cloud)。
-  - **面试日程管理**：可针对单条职位添加面试安排，记录面试笔记、复盘，并支持一键导出为 `.ics` 日历文件。
-- **AI 智能辅助引擎**
-  - **AI 简历匹配诊断**：配置 OpenAI 兼容接口（如 DeepSeek 等）及个人简历后，一键对目标岗位进行深度的匹配度打分与优劣势分析。
-  - **智能招呼语生成**：根据岗位 JD 和你的简历，AI 自动撰写高转化率的个性化打招呼/自荐文案。
-
-## 🧩 各平台抓取与数据提取机制
-
-各招聘平台的前端架构差异巨大：有的平台数据完全通过 Ajax/Fetch 请求异步渲染，可直接截获原始 JSON；有的采用服务端直出 (SSR) 将结构化数据挂载在内嵌 `<script>` 状态中；还有的只能通过解析 DOM 节点文本获取。
-
-本扩展采用**“职位列表页主抓保广度，职位详情页与企业主页按需精准补充保深度”**的混合架构。以下为各平台在 3 类页面上的实际数据获取方式对比：
-
-### 📊 全平台数据获取方式对照表
-
-| 招聘平台 | 1. 职位列表页 (主抓广度) | 2. 职位详情页 (独立点开补充) | 3. 公司主页 (企业全景) |
-| :--- | :--- | :--- | :--- |
-| **Boss 直聘** | ⚡ **纯网络 JSON 拦截**<br>`wapi/zpgeek/search/joblist.json` | 🔍 **纯 DOM 提取** (单页直开时)<br>*(注：自动化列表批跑时拦截侧边详情 API)* | 🔍 **依赖详情页 DOM 工商卡片**<br>*(未设独立公司主页脚本)* |
-| **前程无忧 51job** | ⚡ **纯网络 JSON 拦截**<br>`api/job/search-pc` | 🔀 **双轨混合 (优先 JSON，DOM 兜底)**<br>异步拦截 `job-pcdetail` 与 `company-info` | ⚡ **详情页异步 JSON 顺带提取**<br>拦截 `company-info/pc-info` |
-| **猎聘网 (Liepin)** | ⚡ **纯网络 JSON 拦截**<br>`com.liepin.searchfront4c.pc-search-job` | 🔀 **双轨混合 (内嵌 JSON-LD + DOM 补充)**<br>解析 Schema.org JSON 与工商 DOM | 🔀 **内嵌 $CONFIG + DOM 补充**<br>`liepin_company_isolated.js` |
-| **智联招聘 (Zhilian)** | ⚡ **内嵌 State + 网络 JSON 拦截**<br>首屏 `__INITIAL_STATE__` + 翻页 API | ⚡ **纯结构化 State JSON 提取**<br>直取 `__INITIAL_STATE__.companyExtDetail` | ⚡ **在职位详情页中直接随附提取**<br>无需单独访问公司主页 |
+<p align="center">
+  <img src="https://img.shields.io/badge/Manifest-V3-brightgreen.svg" alt="Manifest V3" />
+  <img src="https://img.shields.io/badge/Platform-Boss%20|%2051job%20|%20Liepin%20|%20Zhilian-blue.svg" alt="Platforms" />
+  <img src="https://img.shields.io/badge/AI%20Engine-SSE%20Stream-orange.svg" alt="AI Engine" />
+  <img src="https://img.shields.io/badge/Storage-IndexedDB%20%2B%20LevelDB-blueviolet.svg" alt="Storage" />
+  <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License" />
+</p>
 
 ---
 
-### 🔬 各平台具体实现与技术细节
+## 📖 目录
 
-#### 1. Boss 直聘 (`www.zhipin.com`)
-- **职位列表页**：**【纯网络 JSON 拦截】**
-  - **实现脚本**：`content_scripts/boss_interceptor.js`
-  - **机制**：在 `MAIN` 世界劫持 `window.fetch` 与 `XMLHttpRequest`，监听匹配 `wapi/zpgeek/search/joblist.json`，直接截取平台原生的 `zpData.jobList` 纯净 JSON 数据包，无损捕获职位基础信息、薪资范围、城市、经验、学历及企业简况。
-- **职位详情页**：**【DOM 提取（单页打开）+ JSON 拦截（列表批量跑）】**
-  - **实现脚本**：`content_scripts/boss_isolated.js` 中的 `scrapeSinglePage()`
-  - **机制**：
-    - **单页独立打开（用户主场景）**：Boss 详情页采用服务端直出渲染（SSR），新开标签页通常不触发详情 Ajax。扩展通过 `document.querySelector` 提取 `.job-sec-text`（完整岗位职责）以及 `.business-info-box` 下的工商元素（企业全称、法定代表人、成立日期、企业类型、经营状态、注册资金、办公地址等）。
-    - **列表批量执行（自动化模式）**：通过模拟点击列表项拦截异步请求 `wapi/zpgeek/job/detail.json` 获取 `zpData.jobInfo`。
+- [🌟 核心定位与设计理念](#-核心定位与设计理念)
+- [🧩 支持的招聘平台矩阵](#-支持的招聘平台矩阵)
+- [🏗️ 技术架构与数据流](#️-技术架构与数据流)
+- [🛡️ 反反爬风控与隐身技术](#️-反反爬风控与隐身技术)
+- [🚀 核心功能全景](#-核心功能全景)
+  - [1. 多源数据采集与深层穿透](#1-多源数据采集与深层穿透)
+  - [2. 沟通记录反向拉黑 (求职防坑神器)](#2-沟通记录反向拉黑-求职防坑神器)
+  - [3. 全网数据标准化与去重合并](#3-全网数据标准化与去重合并)
+  - [4. AI 流式诊断与个性化打招呼 (SSE)](#4-ai-流式诊断与个性化打招呼-sse)
+  - [5. 投递全流程看板 (Kanban)](#5-投递全流程看板-kanban)
+  - [6. 面试日程管理与 .ics 日历导出](#6-面试日程管理与-ics-日历导出)
+  - [7. 数据统计大盘与技能词云](#7-数据统计大盘与技能词云)
+  - [8. 面试题库与 AI 结合简历定制回答](#8-面试题库与-ai-结合简历定制回答)
+- [📂 规范化项目结构](#-规范化项目结构)
+- [🛠️ 安装与部署指南](#️-安装与部署指南)
+- [⚙️ AI 大模型配置指南](#️-ai-大模型配置指南)
+- [❓ 常见问题排查 (FAQ)](#-常见问题排查-faq)
+- [⚠️ 免责声明](#️-免责声明)
 
-#### 2. 前程无忧 51job (`we.51job.com` / `jobs.51job.com`)
-- **职位列表页**：**【纯网络 JSON 拦截】**
-  - **实现脚本**：`content_scripts/51job_interceptor.js`
-  - **机制**：拦截搜索页接口 `api/job/search-pc`，截获 `resultbody.job.items` 规范的职位对象数组。
-- **职位详情页**：**【双轨混合：优先 JSON 拦截，DOM 兜底】**
-  - **实现脚本**：`content_scripts/51job_interceptor.js` 与 `content_scripts/51job_isolated.js`
-  - **机制**：
-    - **优先 JSON 拦截**：页面打开时，51job 会异步请求 `api/pc/open/noauth/jobs/job-pcdetail/`（职位详情 `detailJobInfo`）与 `api/pc/open/noauth/company-info/pc-info`（包含营业执照 `license`、法定代表人、注册资本等）。拦截器截获后直接组装结构化数据；
-    - **DOM 容灾降级**：若网络卡顿未截获到接口，则退化调用 `document.querySelector('.job_msg')` 等解析 DOM，确保抓取成功率达 100%。
+---
 
-#### 3. 猎聘网 (`www.liepin.com` / `c.liepin.com`)
-- **职位列表页**：**【纯网络 JSON 拦截】**
-  - **实现脚本**：`content_scripts/liepin_search_interceptor.js` 与 `content_scripts/liepin_home_interceptor.js`
-  - **机制**：搜索页拦截 `com.liepin.searchfront4c.pc-search-job` 获取 `jobCardList`；首页瀑布流拦截 `api-batch/parallel` 与 `home-recommend-job-new`。
-- **职位详情页**：**【内嵌 JSON-LD + DOM 混合提取】**
-  - **实现脚本**：`content_scripts/liepin_search_isolated.js`
-  - **机制**：
-    - **内嵌结构化 JSON**：直接从 HTML 中的 `<script type="application/ld+json">` 提取搜索引擎专用的 Schema.org 数据（规范的标题、薪资、发布时间、公司链接）以及从 `<script>window.$CONFIG</script>` 提取 `compId`；
-    - **DOM 补充**：结合 `.job-intro-container`（岗位描述）和 `.business-license-container`（提取法人、注册资金、成立日期等）。
-- **公司主页**：**【内嵌 $CONFIG + DOM 补充】**
-  - **实现脚本**：`content_scripts/liepin_company_isolated.js`
-  - **机制**：从页面内嵌 `$CONFIG` 提取企业编号与全称，从页面 DOM 提取企业全景信息。
+## 🌟 核心定位与设计理念
 
-#### 4. 智联招聘 (`sou.zhaopin.com` / `zhaopin.com`)
-- **职位列表页**：**【内嵌 State JSON + 网络 JSON 拦截】**
-  - **实现脚本**：`content_scripts/zhilian_new_isolated.js` 与 `content_scripts/zhilian_interceptor.js`
-  - **机制**：首屏直接从 HTML 内嵌的 `<script>window.__INITIAL_STATE__=...</script>` 中反序列化出首屏全部列表（`positionList`），翻页时拦截 `search/positions` 或 `search/joblist` 接口。
-- **职位详情页**：**【纯结构化 State JSON 提取（极少依赖 DOM）】**
-  - **实现脚本**：`content_scripts/zhilian_new_isolated.js`
-  - **机制**：智联详情页在首屏 HTML 的 `__INITIAL_STATE__` 中直接打包包含了：
-    - `state.jobDetail`（岗位职责、任职要求、薪资福利）
-    - `state.companyExtDetail`（企业的统一社会信用代码、营业执照注册信息、经营范围）
-    - `state.jobDeliverList`（同企业推荐在招职位）
-    因此智联的数据最为纯净完备，完全不受页面 DOM 结构变动或防抓混淆的影响。
+传统求职过程中，求职者面临以下痛点：
+1. **平台割裂**：Boss直聘、51job、猎聘、智联招聘各平台数据分散，重复查看、反复筛选耗费大量精力；
+2. **信息浅层化**：列表页只展示笼统薪资和简要要求，公司真实工商全称、成立年份、参保人数、详细工作地址等隐藏在深层详情中；
+3. **风控拦截严苛**：自动化抓取极易触发滑块验证、账号封禁或反调试死循环；
+4. **投递追踪缺失**：投递后进度杂乱，面试邀请散落在不同软件中，难以形成结构化求职管道；
+5. **AI 赋能脱节**：市面上的 AI 简历工具通常无法直接关联具体的岗位 JD 详情。
 
+**Job Scraper** 采用 **“网络拦截截流 + 隐形沙箱渲染 + 本地化 IndexedDB 加速 + 纯前端 AI 流式代理”** 的一体化架构，打通从**数据获取、企业穿透、简历诊断、个性化触达到面试复盘**的完整闭环。
 
-## 📂 项目结构
+---
+
+## 🧩 支持的招聘平台矩阵
+
+| 招聘平台 | 列表页主抓方式 | 详情页深层穿透方式 | 工商与企业背景提取 | 特色适配能力 |
+| :--- | :--- | :--- | :--- | :--- |
+| **Boss 直聘** (`zhipin.com`) | ⚡ **纯网络 JSON 拦截**<br>`joblist.json` 原生数据包 | 🔀 **DOM 提取 + 详情异步接口**<br>职责、要求、地址、HR状态 | 🏢 支持在招岗位数、在线BOSS、工商营业全称穿透 | 🛡️ 零点击防风控列表模式<br>💬 **聊天会话反向识别拉黑** |
+| **前程无忧 51job** (`51job.com`) | ⚡ **纯网络 JSON 拦截**<br>`api/job/search-pc` | 🔀 **双轨混合 (优先 JSON，DOM 兜底)**<br>拦截 `job-pcdetail` | 🏢 拦截 `company-info/pc-info` 提取法人、执照与规模 | 🛡️ **代理拦截破解无限 debugger**<br>🛡️ 详情页自动降级容灾 |
+| **猎聘网** (`liepin.com`) | ⚡ **纯网络 JSON 拦截**<br>`pc-search-job` / 推荐批次流 | 🔀 **内嵌 JSON-LD + DOM 补充**<br>Schema.org 结构化数据解析 | 🏢 解析 `$CONFIG` 与工商卡片数据 | 🌊 **完美适配首页无限瀑布流**<br>🏷️ 猎头/代招智能标签分离 |
+| **智联招聘** (`zhaopin.com`) | ⚡ **内嵌 State + 翻页拦截**<br>`__INITIAL_STATE__` 首屏反序列化 | ⚡ **纯结构化 State 提取**<br>解析 `state.jobDetail` 纯净包 | 🏢 直接解析 `companyExtDetail` 统一社会信用代码与经营范围 | 💎 **纯净数据零 DOM 污染**<br>影子库多维度城市信息丰富 |
+
+---
+
+## 🏗️ 技术架构与数据流
+
+扩展遵循严格的 **Chrome MV3 安全沙箱规范**，解耦为三大核心运行世界：
+
+```mermaid
+flowchart TD
+    subgraph S1["宿主网页上下文 (MAIN World)"]
+        A1["原生页面发起 XHR / Fetch"] --> A2["Interceptor 网络劫持层"]
+        A2 --> A3["URL 特征参数瞬时净化 (抹除 auto_close/delay)"]
+        A2 --> A4["Function.prototype 原生指纹伪装"]
+        A2 --> A5["51job 反反调试 (Proxy 阻断 debugger)"]
+        A2 --> A6["捕获原生纯净 JSON 数据包"]
+    end
+
+    subgraph S2["扩展隔离沙箱 (ISOLATED World)"]
+        B1["CustomEvent Bridge 通信"] <-- A6
+        B2["任务调度队列 (自动分页/滚动探测)"] --> B1
+        B3["隐形 Iframe / 独立 Tab 详情加载"]
+        B4["DOM 结构兜底解析 (岗位职责/地址/工商)"]
+        B5["风控状态码与验证码熔断监控"]
+    end
+
+    subgraph S3["后台守护进程 (background.js)"]
+        C1["跨标签页调度中枢"] <-- B5
+        C2["AI SSE 统一网关 (OpenAI / Claude / Gemini)"]
+    end
+
+    subgraph S4["统一管理中台 (Options Dashboard)"]
+        D1["本地 IndexedDB 索引加速库 (JobScraperDB)"] <-- C1
+        D2["全网合并去重与多维筛选引擎"]
+        D3["投递全生命周期看板 (Kanban)"]
+        D4["数据可视化大盘 & 技能词云 (Chart.js / WordCloud2)"]
+        D5["AI 流式打字机诊断与招呼语生成"]
+        D6["日历日程导出 (.ics) & 报表导出 (Excel/CSV)"]
+    end
+```
+
+---
+
+## 🛡️ 反反爬风控与隐身技术
+
+为保证采集的高稳定性与账号安全性，项目在底层融入了全方位的防御对抗机制：
+
+1. **URL 特征参数瞬时抹除 (`document_start`)**
+   - 自动化流程传入的 `auto_close=1` 或 `close_delay` 等调试参数，会在页面 HTML 加载第一时刻被 `history.replaceState` 剥离，防止前端埋点（如 Sensors Analytics / ka.js）将自动化特征上报给风控服务端。
+2. **函数指纹伪装 (`Function.prototype.toString`)**
+   - 招聘平台常用 `Function.prototype.toString.call(fetch)` 检测函数是否被 Hook。项目通过 `WeakMap` 与原生 `toString` 映射，确保所有劫持函数输出均为 `function () { [native code] }`。
+3. **反调试死循环破解**
+   - 51job 等平台通过 `Function("debugger")` 构造无限中断冻结开发者工具。拦截层对 `window.Function` 实施代理，正则过滤阻断含有 `debugger` 的代码段，保证调试无阻。
+4. **隐蔽单向跨世界通信**
+   - 放弃容易被网页自身监听的 `window.postMessage`，改用内部随机命名的 `CustomEvent('__zp_ext_bridge__')`，实现从 MAIN 到 ISOLATED 环境的安全投递。
+5. **拟人化行为节奏与安全熔断**
+   - **动态随机抖动**：单条详情请求随机停顿（2.5s ~ 5s）；
+   - **阶梯休眠**：每抓取 8~14 条执行小批量短休眠；每连续点击 50~65 条自动进入长冷却期；
+   - **风控主动熔断**：实时检测状态码（Boss `code: 37`、`403`、`429`）与页面滑块/验证码容器。一旦触发立即断开抓取并弹窗告警，严防封号。
+6. **Iframe 内存安全回收**
+   - 针对批量抓取导致的 DOM 内存泄漏，销毁前强行切断源引用（重定向至 `about:blank` 后清除节点），长时间运行内存稳定。
+
+---
+
+## 🚀 核心功能全景
+
+### 1. 多源数据采集与深层穿透
+- **单页/批量自动化**：支持在列表页点击一键批跑，也支持在详情页单条抓取；
+- **零点击纯列表模式**（Boss直聘独家）：仅保存列表原生接口返回的薪资、要求、福利与 HR 简况，**完全不点击卡片触发详情请求，做到接近 0 风控**；
+- **外包与代招智能识别**：自动结合接口商业标签与岗位描述关键词（“外包”、“代招”、“劳务派遣”），并在前端列表提供醒目警示徽标。
+
+### 2. 沟通记录反向拉黑 (求职防坑神器)
+在 Boss 直聘沟通列表页（`/web/geek/chat`），一键唤起智能逆向扫描：
+- 自动提取全部聊天对话中的 HR 消息；
+- 搭载拒信语义过滤算法（自动排除“经验不限”、“学历不限”等反向干扰词）；
+- 自动识别“暂不匹配”、“已找到合适人选”等婉拒信息，弹出抽屉界面，**一键将婉拒企业批量加入黑名单**，后续列表抓取时自动标红并支持一键过滤。
+
+### 3. 全网数据标准化与去重合并
+- **标准化数据字典**（`libs/job_normalizer.js`）：将四家平台的差异字段统一为标准的：
+  `职位名称`、`公司全称`、`薪资待遇`、`工作经验`、`学历要求`、`职位描述`、`技能标签`、`HR姓名/职位/活跃度`、`公司规模/行业/福利`、`详细工作地址` 等；
+- **全网智能合并**：跨平台基于“公司全称 + 职位名”或规范化 ID 进行去重聚合，避免重复投递。
+
+### 4. AI 流式诊断与个性化打招呼 (SSE)
+- **多模型原生直连**：支持 OpenAI 兼容格式（DeepSeek / Moonshot / 通义千问等）、Anthropic Claude、Google Gemini；
+- **打字机流式渲染**：基于 `chrome.runtime.onConnect` 长连接通道，实现逐字渲染；
+- **五维量化打分**：对比求职者个人简历与目标 JD，从**核心技能（25分）**、**经验相关（25分）**、**教育背景（20分）**、**成就项目（20分）**、**软实力文化（10分）**给出量化评分，并附带针对性扣分说明与改进建议；
+- **高转化率打招呼语生成**：自动提炼简历中与该岗位最契合的优势，生成 100 字内开门见山、直接可发送的打招呼消息。
+
+### 5. 投递全流程看板 (Kanban)
+- 仿 Linear / Trello 的流畅拖拽式求职看板；
+- 预设求职全生命周期管道：
+  `待投递 (To-Apply)` ➔ `已投递 (Applied)` ➔ `一面 (Interview 1)` ➔ `二面 (Interview 2)` ➔ `录用/Offer (Offer)`；
+- 卡片直观展示 AI 匹配分、薪资待遇，点击直接唤起详情弹窗或面试日程。
+
+### 6. 面试日程管理与 .ics 日历导出
+- 记录面试轮次（技术面/HR面/终面）、面试形式（视频/现场/电话）、时间与地点；
+- 记录面试考题、复盘与备忘；
+- **一键导出标准 `.ics` 日历文件**：符合 RFC 5545 规范（修复了换行格式），可直接双击导入 **Apple Calendar (iOS/macOS)、Google Calendar、Outlook** 等，自动设置面试前提醒。
+
+### 7. 数据统计大盘与技能词云
+- **薪资分布直方图**（10k以下、10-20k、20-30k、30k以上）；
+- **工作经验要求饼图**；
+- **高频技能关键词云**：基于 WordCloud2 动态生成当前筛选岗位中最抢手的硬技能与技术栈（如 Java、Spring Boot、Python、Kubernetes 等），指导求职者针对性备战。
+
+### 8. 面试题库与 AI 结合简历定制回答
+- 自建结构化高频题库，支持按技术栈、分类标签进行快速筛选；
+- 支持自拟问题，点击 **“🤖 AI 结合简历生成参考回答”**，大模型将以第一人称口语化风格，结合你上传的简历经历给出定制化应答话术。
+
+---
+
+## 📂 规范化项目结构
 
 ```text
 job-scraper/
-├── manifest.json              # 扩展程序核心配置文件 (Manifest V3)
-├── background.js              # 后台服务守护进程，负责消息中转与图标状态管理
-├── popup/                     # 点击扩展图标时弹出的控制面板
-├── options/                   # 统一的数据管理与可视化后台页面 (Apple macOS 风格)
-│   ├── options.html           # 看板、列表、大盘、大模型配置、简历管理 UI
+├── manifest.json              # 扩展程序核心配置文件 (Chrome MV3)
+├── background.js              # 后台守护进程 (集成 AI SSE 流式传输与后台标签页生命周期)
+├── popup/                     # 工具栏控制面板
+│   ├── popup.html             # 快捷抓取与模式设置 UI
+│   ├── popup.js               # 页面平台识别与抓取交互控制
+│   └── popup.css              # 控制面板样式
+├── options/                   # 统一管理后台 (Apple macOS 玻璃态设计)
+│   ├── options.html           # 看板、列表、大盘、大模型配置、简历管理模板
 │   ├── options.js             # 页面路由、图表渲染、AI 调用及数据处理逻辑
-│   └── options.css            # 现代化的样式系统
-├── content_scripts/           # 注入到各个招聘平台的脚本资源库 (双层架构)
-├── libs/                      # 第三方依赖库 (ECharts, WordCloud, Lucide Icons, SortableJS 等)
-├── icons/                     # 扩展图标资源
-└── utils/                     # 辅助工具脚本
+│   ├── options.css            # 现代化玻璃拟态样式表
+│   ├── chart.js               # 图表渲染库
+│   └── wordcloud2.js          # 高频技能词云引擎
+├── content_scripts/           # 各平台注入脚本库 (MAIN 拦截器与 ISOLATED 提取器)
+│   ├── boss_interceptor.js    # Boss 接口拦截与指纹伪装 (MAIN)
+│   ├── boss_isolated.js       # Boss 页面调度与 DOM 提取 (ISOLATED)
+│   ├── boss_company_isolated.js # Boss 企业主页工商信息提取
+│   ├── 51job_interceptor.js   # 51job 接口拦截与反调试绕过 (MAIN)
+│   ├── 51job_isolated.js      # 51job 任务调度与详情兜底 (ISOLATED)
+│   ├── liepin_search_interceptor.js # 猎聘搜索页拦截器
+│   ├── liepin_search_isolated.js    # 猎聘搜索页调度器
+│   ├── liepin_home_interceptor.js   # 猎聘首页瀑布流拦截器
+│   ├── liepin_home_isolated.js      # 猎聘首页瀑布流调度器
+│   ├── liepin_company_isolated.js   # 猎聘企业主页提取器
+│   ├── zhilian_interceptor.js       # 智联招聘翻页拦截器
+│   ├── zhilian_new_isolated.js      # 智联招聘 State 反序列化调度器
+│   └── dashboard_isolated.js        # 本地服务协同与后台 Tab 代理
+├── libs/                      # 第三方通用库
+│   ├── job_normalizer.js      # 全平台数据结构标准化字典映射引擎
+│   └── xlsx.full.min.js       # Excel / CSV 序列化引擎
+├── utils/                     # 🌟 生产级独立工具层
+│   ├── storage.js             # 高性能 IndexedDB 本地数据库 (JobScraperDB)
+│   ├── ai_stream.js           # AI SSE 打字机流式客户端 (支持自动降级)
+│   └── export_helper.js       # 规范化 Excel/CSV 与 .ics 日历导出工具
+├── tests/                     # 🌟 测试与静态资源归档
+│   ├── archive/               # 历史版本与废弃脚本归档
+│   └── fixtures/              # 各平台测试静态 HTML / 样例数据
+├── icons/                     # 扩展图标 (16/32/48/64/128)
+├── README.md                  # 项目官方使用文档
+└── .gitignore                 # Git 忽略配置
 ```
 
-## 🛠️ 安装说明
+---
 
-1. 下载或 `git clone` 本仓库代码到本地文件夹。
-2. 打开 Chrome 浏览器，在地址栏输入 `chrome://extensions/` 进入扩展程序页面。
-3. 在页面右上角开启 **“开发者模式” (Developer mode)**。
-4. 点击左上角的 **“加载已解压的扩展程序” (Load unpacked)** 按钮。
-5. 选择本项目的根目录 `job-scraper` 文件夹。
-6. 扩展安装成功！建议将扩展图标固定在浏览器工具栏，方便随时调用。
+## 🛠️ 安装与部署指南
 
-## 📖 使用指南
+### 环境要求
+- **Chrome / Edge / Brave** 或任何基于 Chromium 内核的现代浏览器（推荐版本 >= 114）；
+- 支持开发者模式安装。
 
-1. **进入目标网站**
-   在浏览器中打开你需要抓取的平台搜索页（例如 `www.liepin.com/zhaopin` 或 `c.liepin.com`），并输入关键词完成一次正常的职位搜索。
-2. **启动抓取**
-   点击浏览器工具栏的 **Job Scraper** 扩展图标。在弹出的控制面板中，点击对应的【开始抓取】按钮。
-   > **注意**：部分瀑布流页面在刚打开时可能处于数据空置状态，扩展会自动向下滚动尝试激活网络请求。
-3. **监控进度**
-   扩展程序会自动接管当前标签页。你可以看到职位卡片被依次标红（或标绿）高亮，并在右下角弹出一个带边框的小窗口（那是用于抓取深层详情的 iframe）。请**不要关闭当前标签页**。
-4. **查看与导出数据**
-   抓取完毕或手动停止后，在控制面板中点击【前往数据后台】按钮，即可进入统一的数据管理页面进行浏览和导出。
+### 安装步骤
+1. 克隆或下载本仓库代码到本地文件夹：
+   ```bash
+   git clone https://github.com/your-username/job-scraper.git
+   ```
+2. 打开 Chrome 浏览器，在地址栏输入：
+   ```text
+   chrome://extensions/
+   ```
+3. 在页面右上角打开 **“开发者模式” (Developer mode)** 开关；
+4. 点击左上角的 **“加载已解压的扩展程序” (Load unpacked)** 按钮；
+5. 在文件选择框中，选择本项目的根目录 `job-scraper` 文件夹；
+6. 扩展安装成功！建议点击浏览器右上角的拼图图标，将 **统一招聘数据提取助手** 固定在工具栏。
+
+---
+
+## ⚙️ AI 大模型配置指南
+
+点击控制面板的【🖥️ 打开数据管理面板】或右键扩展图标选择【选项】，进入后台侧边栏的 **“大模型配置”**：
+
+### 常用服务商配置示例
+
+#### 1. DeepSeek (推荐，性价比与理解能力极佳)
+- **API URL**：`https://api.deepseek.com/chat/completions`
+- **API Key**：`sk-xxxxxxxxxxxxxxxxxxxxxxxx`
+- **Model**：`deepseek-chat`
+
+#### 2. 月之暗面 Moonshot (Kimi)
+- **API URL**：`https://api.moonshot.cn/v1/chat/completions`
+- **API Key**：`sk-xxxxxxxxxxxxxxxxxxxxxxxx`
+- **Model**：`moonshot-v1-8k`
+
+#### 3. 阿里云百炼 (通义千问 Qwen)
+- **API URL**：`https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions`
+- **API Key**：`sk-xxxxxxxxxxxxxxxxxxxxxxxx`
+- **Model**：`qwen-plus` 或 `qwen-max`
+
+#### 4. Google Gemini (官方原生)
+- **API URL**：`https://generativelanguage.googleapis.com`
+- **API Key**：`AIzaxxxxxxxxxxxxxxxxxxxxxxxx`
+- **Model**：`gemini-1.5-flash` 或 `gemini-1.5-pro`
+
+#### 5. Anthropic Claude (官方原生)
+- **API URL**：`https://api.anthropic.com/v1/messages`
+- **API Key**：`sk-ant-xxxxxxxxxxxxxxxxxxxx`
+- **Model**：`claude-3-5-sonnet-20241022`
+
+> **提示**：配置完成后，点击 **“测试连接”**。首次测试或调用时浏览器会弹出跨域请求权限确认框，请点击 **“允许” (Allow)**。随后在 **“简历管理”** 中粘贴你的 Markdown 或纯文本简历即可启用完整 AI 功能。
+
+---
+
+## ❓ 常见问题排查 (FAQ)
+
+### Q1：点击开始抓取提示“无法连接到网页插件，请先刷新网页”？
+- **原因**：扩展注入脚本（Content Script）在扩展安装或重新加载后，无法自动作用于已经打开的旧标签页。
+- **解决**：在招聘网站页面按下 `F5`（或 `Cmd + R`）刷新当前网页，然后再次点击扩展面板即可正常连接。
+
+### Q2：抓取时弹出滑块验证码或安全中心拦截怎么办？
+- **机制**：扩展具备**安全拦截熔断机制**，一旦发现安全滑块会自动立即停止任务，以保护求职账号不被封禁。
+- **解决**：请不要慌张，在当前页面上手动拖动滑块完成验证，并在网页上随意正常点击浏览 1~2 分钟，随后再重新启动抓取即可。推荐在选项面板勾选 **“🛡️ 仅抓列表基础数据 (零点击防风控)”** 模式。
+
+### Q3：内嵌 Iframe 模式和后台新标签页模式有什么区别？
+- **内嵌 Iframe 模式（默认）**：直接在当前页面右下角静默创建隐藏 frame 加载详情，速度快、对前台操作干扰小；
+- **后台新标签页模式**：通过 Chrome 标签页 API 在后台新开 Tab 获取数据并自动关闭。当个别平台对 Iframe 进行严格的 `X-Frame-Options` 限制时，可切换为后台标签页模式。
+
+### Q4：导出的 `.ics` 文件手机无法识别或时间错乱？
+- 项目已更新为标准 RFC 5545 格式输出，使用标准 CRLF 换行及 UTC 时间戳。导入时请确保手机或电脑的时区设置正确即可。
+
+---
 
 ## ⚠️ 免责声明
 
-本扩展程序仅供个人学习、技术研究与非商业数据分析使用。请严格遵守相关平台的《用户服务协议》与 `robots.txt` 规范，控制抓取频率，不得用于任何非法或损害平台利益的商业用途。因使用本工具造成的任何账号封禁或法律纠纷，开发者概不负责。
+1. 本扩展程序仅供个人学习、技术研究与非商业数据分析使用；
+2. 请严格遵守各招聘平台的《用户服务协议》与 `robots.txt` 规范，自觉控制抓取频次与时长，严禁用于任何高并发商业爬虫、商业化数据倒卖或侵害平台合法权益的行为；
+3. 本项目完全运行在用户的本地浏览器环境中，**不会收集、上传或泄露用户的任何个人简历、账号密码或求职敏感信息**；
+4. 因违反平台规定或不当使用本工具造成的任何账号异常、限制访问或法律纠纷，使用者需自行承担责任，开发者概不负责。

@@ -1502,6 +1502,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 let lastError = null;
                 while (retries > 0) {
                     try {
+                        if (typeof AiStreamClient !== 'undefined') {
+                            return await AiStreamClient.requestStream({
+                                action: 'streamScoreJob',
+                                url: activeAi.url,
+                                key: activeAi.key,
+                                model: activeAi.model,
+                                resume: aiSettings.resume,
+                                company: company,
+                                jobTitle: jobTitle,
+                                reqs: reqs,
+                                jobDesc: jobDesc
+                            });
+                        }
                         return await new Promise((resolve, reject) => {
                             chrome.runtime.sendMessage({
                                 action: 'aiScoreJob',
@@ -1680,7 +1693,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (introductionEmpty) introductionEmpty.style.display = 'none';
         if (introductionContent) introductionContent.style.display = 'flex';
         if (introHeaderActions) introHeaderActions.style.display = 'none';
-        if (introText) introText.innerHTML = '<span style="color:#666;">正在生成定制化打招呼语，请稍候...</span>';
+        if (introText) introText.innerHTML = '<span style="color:#666;">正在连接 AI 流式生成中... <span class="typing-cursor"></span></span>';
 
         const jobDesc = currentJob['职位描述'] || '';
         const jobTitle = currentJob['职位名称'] || '';
@@ -1688,9 +1701,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const reqs = `薪资: ${currentJob['薪资待遇'] || ''}, 经验: ${currentJob['工作经验'] || ''}, 学历: ${currentJob['学历要求'] || ''}`;
 
         try {
-            const response = await new Promise((resolve, reject) => {
-                chrome.runtime.sendMessage({
-                    action: 'aiGenerateIntro',
+            const response = await (typeof AiStreamClient !== 'undefined'
+                ? AiStreamClient.requestStream({
+                    action: 'streamGenerateIntro',
                     url: activeAi.url,
                     key: activeAi.key,
                     model: activeAi.model,
@@ -1698,14 +1711,33 @@ document.addEventListener('DOMContentLoaded', () => {
                     company: company,
                     jobTitle: jobTitle,
                     reqs: reqs,
-                    jobDesc: jobDesc
-                }, (res) => {
-                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                    else if (res && res.success) resolve(res);
-                    else reject(new Error(res ? res.error : '未知错误'));
-                });
-            });
-            const formattedIntro = response.resultText.replace(/\n/g, '<br>');
+                    jobDesc: jobDesc,
+                    onChunk: (chunk, fullText) => {
+                        if (introText) {
+                            introText.innerHTML = fullText.replace(/\n/g, '<br>') + '<span class="typing-cursor"></span>';
+                        }
+                    }
+                })
+                : new Promise((resolve, reject) => {
+                    chrome.runtime.sendMessage({
+                        action: 'aiGenerateIntro',
+                        url: activeAi.url,
+                        key: activeAi.key,
+                        model: activeAi.model,
+                        resume: aiSettings.resume,
+                        company: company,
+                        jobTitle: jobTitle,
+                        reqs: reqs,
+                        jobDesc: jobDesc
+                    }, (res) => {
+                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                        else if (res && res.success) resolve(res);
+                        else reject(new Error(res ? res.error : '未知错误'));
+                    });
+                })
+            );
+
+            const formattedIntro = (response.resultText || '').replace(/\n/g, '<br>');
             if (introText) introText.innerHTML = formattedIntro;
             if (introHeaderActions) introHeaderActions.style.display = 'flex';
 
@@ -2461,6 +2493,15 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             loadData();
         }
+
+        // 异步静默建立并加速 IndexedDB 索引库
+        if (typeof JobStorage !== 'undefined') {
+            JobStorage.syncFromChromeStorage().then(() => {
+                console.log('[JobStorage] IndexedDB 索引库初始化同步就绪');
+            }).catch(err => {
+                console.warn('[JobStorage] IndexedDB 同步降级:', err);
+            });
+        }
     });
 
     // ----------------------------------------------------
@@ -2626,47 +2667,34 @@ ${text}
         const end = interviewEndTime.value;
         const location = interviewLocation.value;
         const notes = interviewNotes.value;
+        const round = interviewRound ? interviewRound.value : '面试';
 
-        if (!start || !end) {
-            showStatus('请先填写开始和结束时间！', 'warning');
+        if (!start) {
+            showStatus('请先填写开始时间！', 'warning');
             return;
         }
 
-        const formatIcsDate = (dateStr) => {
-            const d = new Date(dateStr);
-            return d.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-        };
-
         const jobName = currentInterviewJob['职位名称'] || '';
         const companyName = currentInterviewJob['公司名称'] || '';
-        const summary = `面试: ${companyName} - ${jobName}`;
-        const description = notes || '无备注';
 
-        const icsContent = [
-            'BEGIN:VCALENDAR',
-            'VERSION:2.0',
-            'PRODID:-//Job Scraper//Interview Calendar//EN',
-            'BEGIN:VEVENT',
-            `UID:${new Date().getTime()}@jobscraper`,
-            `DTSTAMP:${formatIcsDate(new Date())}`,
-            `DTSTART:${formatIcsDate(start)}`,
-            `DTEND:${formatIcsDate(end)}`,
-            `SUMMARY:${summary}`,
-            `DESCRIPTION:${description}`,
-            `LOCATION:${location}`,
-            'END:VEVENT',
-            'END:VCALENDAR'
-        ].join('\\r\\n');
-
-        const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `interview_${companyName}_${jobName}.ics`.replace(/\\s+/g, '_');
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        try {
+            if (typeof ExportHelper !== 'undefined') {
+                ExportHelper.exportInterviewToIcs({
+                    companyName,
+                    jobName,
+                    startTime: start,
+                    endTime: end,
+                    location,
+                    notes,
+                    round
+                });
+                showStatus('日历文件 (.ics) 已导出', 'success');
+            } else {
+                showStatus('导出模块不可用', 'error');
+            }
+        } catch (e) {
+            showStatus('导出日历失败: ' + e.message, 'error');
+        }
     });
 
     // --- 题库管理逻辑 (Question Bank) ---
@@ -2933,7 +2961,7 @@ ${text}
     }
 
     if (btnQbAiAnswer) {
-        btnQbAiAnswer.addEventListener('click', () => {
+        btnQbAiAnswer.addEventListener('click', async () => {
             const title = qbInputTitle.value.trim();
             if (!title) {
                 showStatus('请先输入题干', 'warning');
@@ -2946,29 +2974,50 @@ ${text}
             }
 
             const btnOriginalText = btnQbAiAnswer.textContent;
-            btnQbAiAnswer.textContent = '生成中...';
+            btnQbAiAnswer.textContent = '流式生成中...';
             btnQbAiAnswer.disabled = true;
+            qbInputAnswer.value = '';
 
-            chrome.runtime.sendMessage({
-                action: 'aiAnswerQuestion',
-                url: activeAi.url,
-                key: activeAi.key,
-                model: activeAi.model,
-                questionTitle: title,
-                resume: aiSettings.resume
-            }, (response) => {
-                btnQbAiAnswer.textContent = btnOriginalText;
-                btnQbAiAnswer.disabled = false;
-
-                if (chrome.runtime.lastError) {
-                    showStatus('调用AI失败: ' + chrome.runtime.lastError.message, 'error');
-                } else if (response && response.success) {
-                    qbInputAnswer.value = response.resultText;
+            try {
+                if (typeof AiStreamClient !== 'undefined') {
+                    const response = await AiStreamClient.requestStream({
+                        action: 'streamAnswerQuestion',
+                        url: activeAi.url,
+                        key: activeAi.key,
+                        model: activeAi.model,
+                        questionTitle: title,
+                        resume: aiSettings.resume,
+                        onChunk: (chunk, fullText) => {
+                            qbInputAnswer.value = fullText;
+                            qbInputAnswer.scrollTop = qbInputAnswer.scrollHeight;
+                        }
+                    });
+                    qbInputAnswer.value = response.resultText || qbInputAnswer.value;
                     showStatus('生成成功', 'success');
                 } else {
-                    showStatus('生成失败: ' + (response ? response.error : '未知错误'), 'error');
+                    const response = await new Promise((resolve, reject) => {
+                        chrome.runtime.sendMessage({
+                            action: 'aiAnswerQuestion',
+                            url: activeAi.url,
+                            key: activeAi.key,
+                            model: activeAi.model,
+                            questionTitle: title,
+                            resume: aiSettings.resume
+                        }, (res) => {
+                            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                            else if (res && res.success) resolve(res);
+                            else reject(new Error(res ? res.error : '未知错误'));
+                        });
+                    });
+                    qbInputAnswer.value = response.resultText;
+                    showStatus('生成成功', 'success');
                 }
-            });
+            } catch (err) {
+                showStatus('调用AI失败: ' + err.message, 'error');
+            } finally {
+                btnQbAiAnswer.textContent = btnOriginalText;
+                btnQbAiAnswer.disabled = false;
+            }
         });
     }
 

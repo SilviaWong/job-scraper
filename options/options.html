@@ -6,11 +6,29 @@
     <title>招聘数据管理后台</title>
     <link rel="stylesheet" href="options.css">
     <script src="chart.js"></script>
+    <script src="wordcloud2.js"></script>
     <script src="../libs/xlsx.full.min.js"></script>
     <script src="../libs/job_normalizer.js"></script>
+    <script src="../utils/storage.js"></script>
+    <script src="../utils/ai_stream.js"></script>
+    <script src="../utils/export_helper.js"></script>
     
     <!-- Removed Vue & Element Plus due to Chrome MV3 CSP restrictions on unsafe-eval -->
     <style>
+        /* 流式输出打字机闪烁光标 */
+        .typing-cursor {
+            display: inline-block;
+            width: 2px;
+            height: 1em;
+            vertical-align: middle;
+            background-color: #007bff;
+            margin-left: 2px;
+            animation: blinkCursor 0.8s infinite;
+        }
+        @keyframes blinkCursor {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
         /* 原生折叠面板样式 (模仿 Element Plus) */
         .native-collapse { border-top: 1px solid #ebeef5; border-bottom: 1px solid #ebeef5; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
         .native-collapse-item { border-bottom: 1px solid #ebeef5; }
@@ -843,7 +861,6 @@
         </div>
     </div>
 
-    <script src="wordcloud2.js"></script>
     <!-- 题库编辑弹窗 -->
     <div id="qb-modal" class="modal-overlay" style="display: none;">
         <div class="job-detail-modal" style="width: 800px; max-width: 90vw;">
